@@ -1,0 +1,23 @@
+services:
+  pipeline:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: agency_pipeline
+    env_file:
+      - .env
+    environment:
+      CLIENTS_DIR: /app/clients
+      DESTINATION__POSTGRES__CREDENTIALS__HOST: postgres
+      DBT_TARGET_PATH: /tmp/dbt_target
+      DBT_LOG_PATH: /tmp/dbt_logs
+    volumes:
+      - ../../clients:/app/clients
+    stdin_open: true
+    tty: true
+    networks:
+      - agency_internal_net
+
+networks:
+  agency_internal_net:
+    external: true

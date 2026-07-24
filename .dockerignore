@@ -1,0 +1,9 @@
+# ── Blocklist ──
+*
+
+# ── Allowlist (builder stage needs these) ──
+!Dockerfile
+!pyproject.toml
+!uv.lock
+!README.md
+!src/

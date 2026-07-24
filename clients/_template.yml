@@ -1,0 +1,51 @@
+client_id: nuevo_cliente
+client_name: "Nombre Comercial"
+schema: client_nuevo_cliente
+active: false
+
+connectors:
+  meta:
+    enabled: false
+    account_id: ""
+    token_env: META_ACCESS_TOKEN_NUEVO_CLIENTE
+  tiktok:
+    enabled: false
+    account_id: ""
+    token_env: TIKTOK_ACCESS_TOKEN_NUEVO_CLIENTE
+  google:
+    enabled: false
+    customer_id: ""
+    token_env: GOOGLE_ADS_TOKEN_NUEVO_CLIENTE
+
+  facebook:
+    enabled: false
+    page_id: ""
+    token_env: FACEBOOK_ACCESS_TOKEN_NUEVO_CLIENTE
+  instagram:
+    enabled: false
+    instagram_business_id: ""
+    token_env: INSTAGRAM_ACCESS_TOKEN_NUEVO_CLIENTE
+  tiktok_organic:
+    enabled: false
+    open_id: ""
+    token_env: TIKTOK_ORGANIC_ACCESS_TOKEN_NUEVO_CLIENTE
+  youtube:
+    enabled: false
+    channel_id: ""
+    token_env: YOUTUBE_API_KEY_NUEVO_CLIENTE
+  pinterest:
+    enabled: false
+    board_id: ""
+    token_env: PINTEREST_ACCESS_TOKEN_NUEVO_CLIENTE
+  ga4:
+    enabled: false
+    property_id: ""
+    token_env: GA4_ACCESS_TOKEN_NUEVO_CLIENTE
+  gtm:
+    enabled: false
+    account_path: ""
+    token_env: GTM_ACCESS_TOKEN_NUEVO_CLIENTE
+
+dbt:
+  tags:
+    - nuevo_cliente

@@ -1,0 +1,24 @@
+name: agency_dbt
+profile: agency
+model-paths: ["models"]
+macro-paths: ["macros"]
+seed-paths: ["seeds"]
+analysis-paths: ["analyses"]
+# target-path and log-path set via DBT_TARGET_PATH / DBT_LOG_PATH env vars
+
+vars:
+  client_id: "default"
+
+models:
+  agency_dbt:
+    staging:
+      +schema: staging
+      +materialized: view
+      +tags: [staging]
+    intermediate:
+      +schema: staging
+      +materialized: view
+      +tags: [intermediate]
+    marts:
+      +materialized: table
+      +tags: [marts]

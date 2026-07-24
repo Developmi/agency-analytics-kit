@@ -1,0 +1,84 @@
+# Python
+__pycache__/
+*.py[oc]
+*.egg-info
+build/
+dist/
+wheels/
+*.egg
+
+# Virtual environments
+.venv
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment (keep .env.example, ignore .env)
+.env
+!.env.example
+
+# Secrets / credentials
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+cosign.key
+
+# Docker / infra
+pgdata/
+.pipeline/
+
+# dbt
+dbt_packages/
+target/
+logs/
+profile/
+
+# dlt
+.dlt/
+.dlt_pipelines/
+dlt_pipelines/
+
+# Testing / Quality
+.pytest_cache/
+coverage/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.ruff_kcache/
+
+# AI Tools / secrets
+.codegraph/
+.engram/
+.atl/
+secrets/
+
+# Supply chain (SBOM / attestations)
+sbom.*.json
+*.attestation
+
+# Package management
+uv.lock
+
+# Logs / temp
+*.log
+*.tmp
+*.bak
+
+# macOS
+._.Trashes
+.Trashes

@@ -1,0 +1,326 @@
+version: 2
+
+models:
+  # ===== ADS PLATFORMS =====
+
+  - name: stg_meta__ads
+    columns:
+      - name: ad_id
+        tests:
+          - not_null
+      - name: status
+        tests:
+          - accepted_values:
+              arguments:
+                values: ["ACTIVE", "PAUSED", "ARCHIVED", "DELETED"]
+
+  - name: stg_meta__campaigns
+    columns:
+      - name: campaign_id
+        tests:
+          - not_null
+          - unique
+      - name: status
+        tests:
+          - accepted_values:
+              arguments:
+                values: ["ACTIVE", "PAUSED", "ARCHIVED", "DELETED"]
+
+  - name: stg_tiktok__ads
+    columns:
+      - name: ad_id
+        tests:
+          - not_null
+      - name: status
+        tests:
+          - accepted_values:
+              arguments:
+                values: ["ACTIVE", "PAUSED", "ARCHIVED", "DELETED"]
+
+  - name: stg_tiktok__campaigns
+    columns:
+      - name: campaign_id
+        tests:
+          - not_null
+          - unique
+      - name: status
+        tests:
+          - accepted_values:
+              arguments:
+                values: ["ACTIVE", "PAUSED", "ARCHIVED", "DELETED"]
+
+  - name: stg_google__ads
+    columns:
+      - name: ad_id
+        tests:
+          - not_null
+      - name: campaign_id
+        tests:
+          - not_null
+      - name: status
+        tests:
+          - accepted_values:
+              arguments:
+                values: ["ENABLED", "PAUSED", "REMOVED"]
+
+  - name: stg_google__campaigns
+    columns:
+      - name: campaign_id
+        tests:
+          - not_null
+          - unique
+      - name: status
+        tests:
+          - accepted_values:
+              arguments:
+                values: ["ENABLED", "PAUSED", "REMOVED"]
+
+  # ===== SOCIAL ORGANIC =====
+
+  - name: stg_facebook__page_posts
+    columns:
+      - name: post_id
+        tests:
+          - not_null
+
+  - name: stg_facebook__feed
+    columns:
+      - name: feed_item_id
+        tests:
+          - not_null
+
+  - name: stg_facebook__page_insights_daily
+    columns:
+      - name: report_date
+        tests:
+          - not_null
+
+  - name: stg_instagram__media
+    columns:
+      - name: media_id
+        tests:
+          - not_null
+      - name: media_type
+        tests:
+          - accepted_values:
+              arguments:
+                values: ["IMAGE", "VIDEO", "CAROUSEL", "REELS"]
+
+  - name: stg_instagram__insights_daily
+    columns:
+      - name: report_date
+        tests:
+          - not_null
+
+  - name: stg_tiktok_organic__profile_stats
+    columns:
+      - name: report_date
+        tests:
+          - not_null
+
+  - name: stg_tiktok_organic__videos_organic
+    columns:
+      - name: video_id
+        tests:
+          - not_null
+
+  - name: stg_pinterest__boards
+    columns:
+      - name: board_id
+        tests:
+          - not_null
+
+  - name: stg_pinterest__pins
+    columns:
+      - name: pin_id
+        tests:
+          - not_null
+
+  - name: stg_pinterest__board_insights
+    columns:
+      - name: report_date
+        tests:
+          - not_null
+      - name: board_id
+        tests:
+          - not_null
+
+  # ===== ANALYTICS =====
+
+  - name: stg_youtube__channel_stats
+    columns:
+      - name: report_date
+        tests:
+          - not_null
+
+  - name: stg_youtube__videos
+    columns:
+      - name: video_id
+        tests:
+          - not_null
+
+  - name: stg_youtube__video_daily_analytics
+    columns:
+      - name: report_date
+        tests:
+          - not_null
+      - name: video_id
+        tests:
+          - not_null
+
+  - name: stg_ga4__daily_stats
+    columns:
+      - name: report_date
+        tests:
+          - not_null
+
+  - name: stg_ga4__page_analytics
+    columns:
+      - name: report_date
+        tests:
+          - not_null
+      - name: page_path
+        tests:
+          - not_null
+
+  - name: stg_ga4__event_analytics
+    columns:
+      - name: report_date
+        tests:
+          - not_null
+      - name: event_name
+        tests:
+          - not_null
+
+  - name: stg_gtm__containers
+    columns:
+      - name: container_id
+        tests:
+          - not_null
+
+  - name: stg_gtm__tags
+    columns:
+      - name: tag_id
+        tests:
+          - not_null
+      - name: container_id
+        tests:
+          - not_null
+
+  - name: stg_gtm__triggers
+    columns:
+      - name: trigger_id
+        tests:
+          - not_null
+      - name: container_id
+        tests:
+          - not_null
+
+  # ===== INTERMEDIATE =====
+
+  - name: int_unified_spend
+    columns:
+      - name: source_platform
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["Meta", "TikTok", "Google"]
+      - name: ad_id
+        tests:
+          - not_null
+      - name: spend
+        tests:
+          - not_null
+      - name: impressions
+        tests:
+          - not_null
+      - name: clicks
+        tests:
+          - not_null
+      - name: report_date
+        tests:
+          - not_null
+
+  # ===== OBSERVABILITY =====
+
+  - name: stg_public__pipeline_runs
+    columns:
+      - name: run_id
+        tests:
+          - not_null
+          - unique
+      - name: client_id
+        tests:
+          - not_null
+      - name: run_status
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["running", "success", "failed"]
+
+  - name: stg_public__pipeline_run_steps
+    columns:
+      - name: step_id
+        tests:
+          - not_null
+          - unique
+      - name: run_id
+        tests:
+          - not_null
+      - name: step_status
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["pending", "running", "success", "failed", "skipped"]
+
+  - name: int_pipeline_daily_summary
+    columns:
+      - name: report_date
+        tests:
+          - not_null
+      - name: client_id
+        tests:
+          - not_null
+
+  - name: pipeline_monitoring
+    columns:
+      - name: run_id
+        tests:
+          - not_null
+      - name: client_id
+        tests:
+          - not_null
+      - name: run_status
+        tests:
+          - accepted_values:
+              arguments:
+                values: ["running", "success", "failed"]
+
+  # ===== MARTS =====
+
+  - name: campaign_performance
+    columns:
+      - name: platform
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["Meta", "TikTok", "Google"]
+      - name: report_date
+        tests:
+          - not_null
+
+  - name: ad_spend_summary
+    columns:
+      - name: platform
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["Meta", "TikTok", "Google"]
+      - name: report_date
+        tests:
+          - not_null

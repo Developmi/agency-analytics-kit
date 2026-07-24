@@ -1,0 +1,51 @@
+client_id: acme
+client_name: "Acme Corp"
+schema: client_acme
+active: true
+
+connectors:
+  meta:
+    enabled: true
+    account_id: "1234567890"
+    token_env: META_ACCESS_TOKEN_ACME
+  tiktok:
+    enabled: false
+    account_id: ""
+    token_env: TIKTOK_ACCESS_TOKEN_ACME
+  google:
+    enabled: true
+    customer_id: "987-654-3210"
+    token_env: GOOGLE_ADS_TOKEN_ACME
+
+  facebook:
+    enabled: false
+    page_id: ""
+    token_env: FACEBOOK_ACCESS_TOKEN_ACME
+  instagram:
+    enabled: false
+    instagram_business_id: ""
+    token_env: INSTAGRAM_ACCESS_TOKEN_ACME
+  tiktok_organic:
+    enabled: false
+    open_id: ""
+    token_env: TIKTOK_ORGANIC_ACCESS_TOKEN_ACME
+  youtube:
+    enabled: false
+    channel_id: ""
+    token_env: YOUTUBE_API_KEY_ACME
+  pinterest:
+    enabled: false
+    board_id: ""
+    token_env: PINTEREST_ACCESS_TOKEN_ACME
+  ga4:
+    enabled: false
+    property_id: ""
+    token_env: GA4_ACCESS_TOKEN_ACME
+  gtm:
+    enabled: false
+    account_path: ""
+    token_env: GTM_ACCESS_TOKEN_ACME
+
+dbt:
+  tags:
+    - acme

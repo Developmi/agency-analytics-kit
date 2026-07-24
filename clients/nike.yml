@@ -1,0 +1,51 @@
+client_id: nike
+client_name: "Nike Inc"
+schema: client_nike
+active: true
+
+connectors:
+  meta:
+    enabled: true
+    account_id: "0987654321"
+    token_env: META_ACCESS_TOKEN_NIKE
+  tiktok:
+    enabled: true
+    account_id: "TIK987654"
+    token_env: TIKTOK_ACCESS_TOKEN_NIKE
+  google:
+    enabled: false
+    customer_id: ""
+    token_env: GOOGLE_ADS_TOKEN_NIKE
+
+  facebook:
+    enabled: false
+    page_id: ""
+    token_env: FACEBOOK_ACCESS_TOKEN_NIKE
+  instagram:
+    enabled: false
+    instagram_business_id: ""
+    token_env: INSTAGRAM_ACCESS_TOKEN_NIKE
+  tiktok_organic:
+    enabled: false
+    open_id: ""
+    token_env: TIKTOK_ORGANIC_ACCESS_TOKEN_NIKE
+  youtube:
+    enabled: false
+    channel_id: ""
+    token_env: YOUTUBE_API_KEY_NIKE
+  pinterest:
+    enabled: false
+    board_id: ""
+    token_env: PINTEREST_ACCESS_TOKEN_NIKE
+  ga4:
+    enabled: false
+    property_id: ""
+    token_env: GA4_ACCESS_TOKEN_NIKE
+  gtm:
+    enabled: false
+    account_path: ""
+    token_env: GTM_ACCESS_TOKEN_NIKE
+
+dbt:
+  tags:
+    - nike

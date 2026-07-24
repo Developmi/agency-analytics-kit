@@ -1,0 +1,86 @@
+version: 2
+
+sources:
+  - name: raw_meta
+    database: agency_dw
+    schema: raw_meta
+    tables:
+      - name: ads
+      - name: campaigns
+
+  - name: raw_tiktok
+    database: agency_dw
+    schema: raw_tiktok
+    tables:
+      - name: ads
+      - name: campaigns
+
+  - name: raw_google
+    database: agency_dw
+    schema: raw_google
+    tables:
+      - name: ads
+      - name: campaigns
+
+  - name: raw_facebook
+    database: agency_dw
+    schema: raw_facebook
+    tables:
+      - name: page_posts
+      - name: feed
+      - name: page_insights_daily
+
+  - name: raw_instagram
+    database: agency_dw
+    schema: raw_instagram
+    tables:
+      - name: media
+      - name: insights_daily
+
+  - name: raw_tiktok_organic
+    database: agency_dw
+    schema: raw_tiktok_organic
+    tables:
+      - name: profile_stats
+      - name: videos_organic
+
+  - name: raw_youtube
+    database: agency_dw
+    schema: raw_youtube
+    tables:
+      - name: channel_stats
+      - name: videos
+      - name: video_daily_analytics
+
+  - name: raw_pinterest
+    database: agency_dw
+    schema: raw_pinterest
+    tables:
+      - name: boards
+      - name: pins
+      - name: board_insights
+
+  - name: raw_ga4
+    database: agency_dw
+    schema: raw_ga4
+    tables:
+      - name: daily_stats
+      - name: page_analytics
+      - name: event_analytics
+
+  - name: raw_gtm
+    database: agency_dw
+    schema: raw_gtm
+    tables:
+      - name: containers
+      - name: tags
+      - name: triggers
+
+  # ===== OBSERVABILITY =====
+
+  - name: public
+    database: agency_dw
+    schema: public
+    tables:
+      - name: pipeline_runs
+      - name: pipeline_run_steps
