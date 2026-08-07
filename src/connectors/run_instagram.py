@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import dlt
@@ -96,7 +97,11 @@ def _do_request(url, params, context, retries=MAX_RETRIES):
 def get_media(instagram_business_id: str, access_token: str):
     url = f"{INSTAGRAM_API_BASE}/{instagram_business_id}/media"
     params: dict[str, Any] | None = {
-        "fields": "id,caption,media_type,like_count,comments_count,timestamp,media_url,permalink",
+        "fields": (
+            "id,caption,media_type,like_count,comments_count,timestamp,"
+            "media_url,permalink,thumbnail_url,shortcode,"
+            "media_product_type,owner{id},is_comment_enabled"
+        ),
         "access_token": access_token,
         "limit": 100,
     }
@@ -107,48 +112,60 @@ def get_media(instagram_business_id: str, access_token: str):
                 "media_id": item.get("id"),
                 "caption": item.get("caption"),
                 "media_type": item.get("media_type"),
+                "media_url": item.get("media_url"),
+                "permalink": item.get("permalink"),
+                "thumbnail_url": item.get("thumbnail_url"),
+                "shortcode": item.get("shortcode"),
+                "media_product_type": item.get("media_product_type"),
+                "owner_id": (item.get("owner") or {}).get("id"),
+                "is_comment_enabled": item.get("is_comment_enabled"),
                 "like_count": int(item.get("like_count", 0) or 0),
                 "comments_count": int(item.get("comments_count", 0) or 0),
                 "timestamp": item.get("timestamp"),
-                "permalink": item.get("permalink"),
             }
 
         url = data.get("paging", {}).get("next")
         params = None
 
 
-@dlt.resource(name="insights_daily", write_disposition="replace")
-def get_insights(instagram_business_id: str, access_token: str):
-    base_url = f"{INSTAGRAM_API_BASE}/{instagram_business_id}/insights"
+MAX_INSTAGRAM_WINDOW_DAYS = 30  # API limit: 30 days between since and until
+FC_WINDOW_DAYS = 30  # follower_count only available for last 30 days
 
-    # Call 1: time_series metrics - per-day data
-    time_metrics = ["reach", "follower_count"]
-    ts_params = {
-        "metric": ",".join(time_metrics),
+
+def _fetch_window_metrics(base_url, since_ts, until_ts, access_token, context):
+    """Fetch one 30-day window of reach (time_series) + views/profile_views (total_value).
+    Returns (reach_by_date, total_values_dict)."""
+    params_ts = {
+        "metric": "reach",
         "period": "day",
         "metric_type": "time_series",
+        "since": since_ts,
+        "until": until_ts,
         "access_token": access_token,
     }
-    ts_data = _do_request(base_url, ts_params, f"instagram {instagram_business_id} time_series")
+    ts_data = _do_request(base_url, params_ts, f"{context} ts s={since_ts}")
 
-    metric_values: dict[str, Any] = {}
+    reach_by_date: dict[str, Any] = {}
     for insight in ts_data.get("data", []):
-        metric_name = insight.get("name")
         for value in insight.get("values", []):
             date = (value.get("end_time") or "")[:10]
-            if not date:
-                continue
-            metric_values.setdefault(date, {})[metric_name] = value.get("value")
+            if date:
+                reach_by_date[date] = value.get("value")
 
-    # Call 2: total_value metrics - single cumulative sum
-    total_metrics = ["profile_views", "views"]
-    tv_params = {
-        "metric": ",".join(total_metrics),
+    params_tv = {
+        "metric": (
+            "views,profile_views,"
+            "likes,comments,shares,saves,"
+            "total_interactions,accounts_engaged,"
+            "website_clicks"
+        ),
         "period": "day",
         "metric_type": "total_value",
+        "since": since_ts,
+        "until": until_ts,
         "access_token": access_token,
     }
-    tv_data = _do_request(base_url, tv_params, f"instagram {instagram_business_id} total_value")
+    tv_data = _do_request(base_url, params_tv, f"{context} tv s={since_ts}")
 
     total_values = {}
     for insight in tv_data.get("data", []):
@@ -156,22 +173,129 @@ def get_insights(instagram_business_id: str, access_token: str):
         tv = insight.get("total_value", {})
         total_values[name] = tv.get("value")
 
-    # Merge: yield a row for each time_series date + the latest total_values
-    for date, vals in sorted(metric_values.items()):
+    return reach_by_date, total_values
+
+
+def _fetch_follower_count(base_url, access_token, context):
+    """Fetch follower_count for the last 30 days (time_series). Returns dict[date] -> count."""
+    now = datetime.now(timezone.utc)
+    params = {
+        "metric": "follower_count",
+        "period": "day",
+        "metric_type": "time_series",
+        "since": int((now - timedelta(days=FC_WINDOW_DAYS)).timestamp()),
+        "until": int(now.timestamp()),
+        "access_token": access_token,
+    }
+    data = _do_request(base_url, params, f"{context} follower_count")
+
+    values: dict[str, Any] = {}
+    for insight in data.get("data", []):
+        for value in insight.get("values", []):
+            date = (value.get("end_time") or "")[:10]
+            if date:
+                values[date] = value.get("value")
+    return values
+
+
+@dlt.resource(name="insights_daily", write_disposition="replace")
+def get_insights(instagram_business_id: str, access_token: str, insights_days_back: int = 729):
+    base_url = f"{INSTAGRAM_API_BASE}/{instagram_business_id}/insights"
+
+    now = datetime.now(timezone.utc)
+    until_dt = now
+    since_dt = now - timedelta(days=insights_days_back)
+
+    # Iterate 30-day windows — all metrics have this limit
+    all_reach: dict[str, Any] = {}
+    all_total: dict[str, Any] = {}
+
+    window_start = since_dt
+    while window_start < until_dt:
+        window_end = min(window_start + timedelta(days=MAX_INSTAGRAM_WINDOW_DAYS), until_dt)
+        s_ts = int(window_start.timestamp())
+        e_ts = int(window_end.timestamp())
+
+        reach_by_date, tv = _fetch_window_metrics(
+            base_url,
+            s_ts,
+            e_ts,
+            access_token,
+            f"instagram {instagram_business_id}",
+        )
+        all_reach.update(reach_by_date)
+        # Keep updating total_values so the latest window's values win
+        all_total.update(tv)
+
+        window_start = window_end
+
+    # Follower count: only the last 30 days
+    follower_by_date = _fetch_follower_count(
+        base_url,
+        access_token,
+        f"instagram {instagram_business_id}",
+    )
+
+    all_dates = sorted(set(all_reach.keys()) | set(follower_by_date.keys()))
+    for date in all_dates:
         yield {
             "report_date": date,
-            "reach": vals.get("reach"),
-            "views": total_values.get("views"),
-            "profile_views": total_values.get("profile_views"),
-            "follower_count": vals.get("follower_count"),
+            "reach": all_reach.get(date),
+            "views": all_total.get("views"),
+            "profile_views": all_total.get("profile_views"),
+            "follower_count": follower_by_date.get(date),
+            # Total-value metrics
+            "likes": all_total.get("likes"),
+            "comments": all_total.get("comments"),
+            "shares": all_total.get("shares"),
+            "saves": all_total.get("saves"),
+            "total_interactions": all_total.get("total_interactions"),
+            "accounts_engaged": all_total.get("accounts_engaged"),
+            "website_clicks": all_total.get("website_clicks"),
+            "email_contacts": all_total.get("email_contacts"),
+            "get_directions_clicks": all_total.get("get_directions_clicks"),
+            "phone_call_clicks": all_total.get("phone_call_clicks"),
         }
 
 
+@dlt.resource(name="business_profile", write_disposition="replace")
+def get_business_profile(instagram_business_id: str, access_token: str):
+    state = dlt.current.resource_state()
+    today = datetime.now(timezone.utc).date().isoformat()
+    if state.get("last_run") == today:
+        return
+
+    url = f"{INSTAGRAM_API_BASE}/{instagram_business_id}"
+    params: dict[str, Any] = {
+        "fields": (
+            "id,username,name,profile_picture_url,"
+            "biography,website,followers_count,follows_count,media_count"
+        ),
+        "access_token": access_token,
+    }
+    data = _do_request(url, params, f"instagram {instagram_business_id} profile")
+
+    yield {
+        "ig_id": data.get("id"),
+        "username": data.get("username"),
+        "name": data.get("name"),
+        "profile_picture_url": data.get("profile_picture_url"),
+        "biography": data.get("biography"),
+        "website": data.get("website"),
+        "followers_count": data.get("followers_count"),
+        "follows_count": data.get("follows_count"),
+        "media_count": data.get("media_count"),
+    }
+
+    state["last_run"] = today
+
+
 @dlt.source
-def instagram_source(instagram_business_id: str, access_token: str):
+def instagram_source(instagram_business_id: str, access_token: str, insights_days_back: int = 729):
     return [
         get_media(instagram_business_id, access_token),
-        get_insights(instagram_business_id, access_token),
+        get_insights(instagram_business_id, access_token, insights_days_back),
+        get_business_profile(instagram_business_id, access_token),
     ]
 
 
@@ -226,5 +350,7 @@ if __name__ == "__main__":
         destination="postgres",
         dataset_name="raw_instagram",
     )
-    info = pipeline.run(instagram_source(instagram_business_id, access_token))
+    insights_days_back = connector.get("insights_days_back", 729)
+
+    info = pipeline.run(instagram_source(instagram_business_id, access_token, insights_days_back))
     print(f"[INSTAGRAM] Done: {info}")
