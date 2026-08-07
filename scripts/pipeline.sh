@@ -46,6 +46,61 @@ Status: <code>${status:-no encontrado}</code>"
   fi
 }
 
+# ─── Map connector name → dbt staging models ───────────────────────────────
+get_connector_models() {
+  case "$1" in
+    meta)          echo "stg_meta__ads stg_meta__campaigns" ;;
+    tiktok)        echo "stg_tiktok__ads stg_tiktok__campaigns" ;;
+    google)        echo "stg_google__ads stg_google__campaigns" ;;
+    facebook)      echo "stg_facebook__page_posts stg_facebook__feed stg_facebook__page_insights_daily" ;;
+    instagram)     echo "stg_instagram__media stg_instagram__insights_daily" ;;
+    tiktok_organic) echo "stg_tiktok_organic__profile_stats stg_tiktok_organic__videos_organic" ;;
+    youtube)       echo "stg_youtube__channel_stats stg_youtube__videos stg_youtube__video_daily_analytics" ;;
+    pinterest)     echo "stg_pinterest__boards stg_pinterest__pins stg_pinterest__board_insights" ;;
+    ga4)           echo "stg_ga4__daily_stats stg_ga4__page_analytics stg_ga4__event_analytics" ;;
+    gtm)           echo "stg_gtm__containers stg_gtm__tags stg_gtm__triggers" ;;
+    public)        echo "stg_public__pipeline_runs stg_public__pipeline_run_steps" ;;
+  esac
+}
+
+# ─── YAML helper (usa pyyaml dentro del container) ──────────────────────────
+yaml_get() {
+  local file=$1
+  local path=$2
+  docker exec agency_pipeline python3 -c "
+import yaml, sys
+with open('/app/clients/$(basename "$file")') as f:
+    data = yaml.safe_load(f)
+    val = data
+    for p in '${path}'.lstrip('.').split('.'):
+        if isinstance(val, dict):
+            val = val.get(p)
+        else:
+            val = None
+            break
+    print(str(val).lower() if val is not None else 'false')
+"
+}
+
+yaml_keys() {
+  local file=$1
+  local path=$2
+  docker exec agency_pipeline python3 -c "
+import yaml, sys
+with open('/app/clients/$(basename "$file")') as f:
+    data = yaml.safe_load(f)
+    val = data
+    for p in '${path}'.lstrip('.').split('.'):
+        if isinstance(val, dict):
+            val = val.get(p, {})
+        else:
+            val = {}
+            break
+    for k in (val or {}):
+        print(k)
+"
+}
+
 check_exit_code() {
   local code=$1
   local step=$2
@@ -63,11 +118,11 @@ Cliente: <code>$client</code>"
 # ─── Observabilidad: pipeline_runs ─────────────────────────────────────────
 
 psql_exec() {
-  docker exec -i "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -At -c "$1"
+  docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -At -c "$1" < /dev/null | head -1
 }
 
 psql_cmd() {
-  docker exec -i "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -c "$1"
+  docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -c "$1" < /dev/null
 }
 
 pipeline_start_run() {
@@ -157,8 +212,8 @@ overall_failed=0
 for client_file in "$CLIENTS_DIR"/*.yml; do
   [ -f "$client_file" ] || continue
 
-  client_id=$(yq '.client_id' "$client_file")
-  active=$(yq '.active' "$client_file")
+  client_id=$(yaml_get "$client_file" '.client_id')
+  active=$(yaml_get "$client_file" '.active')
 
   if [ "$active" != "true" ]; then
     log "Cliente $client_id inactivo. Saltando."
@@ -175,11 +230,12 @@ for client_file in "$CLIENTS_DIR"/*.yml; do
   dbt_status="skipped"
 
   # Contar conectores habilitados
-  for conn in meta tiktok google facebook instagram tiktok_organic youtube pinterest ga4 gtm; do
-    if [ "$(yq ".connectors.${conn}.enabled" "$client_file")" = "true" ]; then
+  while IFS= read -r conn; do
+    [ -z "$conn" ] && continue
+    if [ "$(yaml_get "$client_file" ".connectors.${conn}.enabled")" = "true" ]; then
       connectors_total=$((connectors_total + 1))
     fi
-  done
+  done < <(yaml_keys "$client_file" ".connectors")
 
   # Extracción por conector habilitado
   while IFS='|' read -r conn_name conn_flag; do
@@ -201,16 +257,54 @@ Cliente: <code>${client_id}</code>
 Conector: <code>${conn_name}</code>"
       log "ERROR: dlt_${conn_name} falló para ${client_id}. Continuando con siguiente conector."
     fi
-  done < <(for conn in meta tiktok google facebook instagram tiktok_organic youtube pinterest ga4 gtm; do
-    echo "${conn}|$(yq ".connectors.${conn}.enabled" "$client_file")"
-  done)
+  done < <(while IFS= read -r conn; do
+    [ -z "$conn" ] && continue
+    echo "${conn}|$(yaml_get "$client_file" ".connectors.${conn}.enabled")"
+  done < <(yaml_keys "$client_file" ".connectors"))
 
   # Transformación dbt (solo si al menos un conector funcionó)
   if [ "$connectors_ok" -gt 0 ]; then
     step_id=$(pipeline_start_step "$run_id" "dbt_run")
-    log "Ejecutando dbt para ${client_id}..."
+
+    # Leer schema del cliente desde YAML
+    client_schema_val=$(yaml_get "$client_file" '.schema')
+
+    # Construir selector dinámico de modelos según conectores habilitados
+    dbt_select=""
+    has_meta="false"
+    has_tiktok="false"
+    has_google="false"
+    while IFS= read -r conn; do
+      [ -z "$conn" ] && continue
+      enabled=$(yaml_get "$client_file" ".connectors.${conn}.enabled")
+      if [ "$enabled" = "true" ]; then
+        dbt_select="$dbt_select $(get_connector_models "$conn")"
+        case "$conn" in
+          meta)   has_meta="true"   ;;
+          tiktok) has_tiktok="true"  ;;
+          google) has_google="true"  ;;
+        esac
+      fi
+    done < <(yaml_keys "$client_file" ".connectors")
+
+    # Modelos de monitoreo de pipeline siempre disponibles
+    dbt_select="$dbt_select int_pipeline_daily_summary pipeline_monitoring"
+
+    # int_unified_spend y sus marts requieren los 3 (meta + tiktok + google)
+    if [ "$has_meta" = "true" ] && [ "$has_tiktok" = "true" ] && [ "$has_google" = "true" ]; then
+      dbt_select="$dbt_select int_unified_spend ad_spend_summary campaign_performance"
+      log "dbt: incluidos modelos de inversión publicitaria (meta+tiktok+google)"
+    else
+      log "dbt: modelos de inversión omitidos (faltan meta, tiktok o google)"
+    fi
+
+    log "dbt: seleccionados${dbt_select}"
+    dbt_select="${dbt_select## }"
+    dbt_vars='{"client_id": "'"${client_id}"'", "client_schema": "'"${client_schema_val}"'"}'
     if docker exec -w /app/src/dbt_project agency_pipeline \
-         dbt run --vars "{\"client_id\": \"${client_id}\"}" --profiles-dir .; then
+         dbt run --select "${dbt_select}" \
+                 --vars "${dbt_vars}" \
+                 --profiles-dir .; then
       dbt_status="success"
       pipeline_finish_step "$step_id" "success"
     else
