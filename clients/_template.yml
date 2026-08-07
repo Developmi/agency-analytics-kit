@@ -21,14 +21,19 @@ connectors:
     enabled: false
     page_id: ""
     token_env: FACEBOOK_ACCESS_TOKEN_NUEVO_CLIENTE
+    insights_days_back: 729
   instagram:
     enabled: false
     instagram_business_id: ""
     token_env: INSTAGRAM_ACCESS_TOKEN_NUEVO_CLIENTE
+    insights_days_back: 729
   tiktok_organic:
     enabled: false
     open_id: ""
     token_env: TIKTOK_ORGANIC_ACCESS_TOKEN_NUEVO_CLIENTE
+    client_key_env: TIKTOK_ORGANIC_CLIENT_KEY_NUEVO_CLIENTE
+    client_secret_env: TIKTOK_ORGANIC_CLIENT_SECRET_NUEVO_CLIENTE
+    refresh_token_env: TIKTOK_ORGANIC_REFRESH_TOKEN_NUEVO_CLIENTE
   youtube:
     enabled: false
     channel_id: ""

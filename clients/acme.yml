@@ -1,7 +1,7 @@
 client_id: acme
 client_name: "Acme Corp"
 schema: client_acme
-active: true
+active: false
 
 connectors:
   meta:

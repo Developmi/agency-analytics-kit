@@ -29,6 +29,7 @@ sources:
       - name: page_posts
       - name: feed
       - name: page_insights_daily
+      - name: page_profile
 
   - name: raw_instagram
     database: agency_dw
@@ -36,6 +37,7 @@ sources:
     tables:
       - name: media
       - name: insights_daily
+      - name: business_profile
 
   - name: raw_tiktok_organic
     database: agency_dw

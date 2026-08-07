@@ -8,6 +8,7 @@ analysis-paths: ["analyses"]
 
 vars:
   client_id: "default"
+  client_schema: "public"
 
 models:
   agency_dbt:

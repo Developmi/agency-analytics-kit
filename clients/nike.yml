@@ -1,7 +1,7 @@
 client_id: nike
 client_name: "Nike Inc"
 schema: client_nike
-active: true
+active: false
 
 connectors:
   meta:
