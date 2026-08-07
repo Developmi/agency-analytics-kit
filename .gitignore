@@ -66,6 +66,8 @@ htmlcov/
 .engram/
 .atl/
 secrets/
+.envsitter/
+openspec/
 
 # Supply chain (SBOM / attestations)
 sbom.*.json
