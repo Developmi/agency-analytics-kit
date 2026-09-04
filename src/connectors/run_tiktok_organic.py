@@ -13,9 +13,7 @@ BACKOFF_BASE = 2
 BACKOFF_MAX = 120
 
 
-def _refresh_access_token(
-    client_key: str, client_secret: str, refresh_token: str
-) -> dict:
+def _refresh_access_token(client_key: str, client_secret: str, refresh_token: str) -> dict:
     url = f"{TIKTOK_API_BASE}/v2/oauth/token/"
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     data = {
@@ -78,8 +76,7 @@ def _do_request(
             if attempt < MAX_RETRIES:
                 wait = min(BACKOFF_BASE * (2**attempt), BACKOFF_MAX)
                 print(
-                    f"[TIKTOK_ORGANIC] Retrying in {wait}s"
-                    f" (attempt {attempt + 1}/{MAX_RETRIES})..."
+                    f"[TIKTOK_ORGANIC] Retrying in {wait}s (attempt {attempt + 1}/{MAX_RETRIES})..."
                 )
                 time.sleep(wait)
                 continue
@@ -89,14 +86,11 @@ def _do_request(
         if wait:
             if attempt < MAX_RETRIES:
                 w = min(wait, BACKOFF_MAX)
-                print(
-                    f"[TIKTOK_ORGANIC] Rate limited ({context}). Retrying in {w}s..."
-                )
+                print(f"[TIKTOK_ORGANIC] Rate limited ({context}). Retrying in {w}s...")
                 time.sleep(w)
                 continue
             raise Exception(
-                f"[TIKTOK_ORGANIC] Rate limit exceeded"
-                f" after {MAX_RETRIES} retries ({context})."
+                f"[TIKTOK_ORGANIC] Rate limit exceeded after {MAX_RETRIES} retries ({context})."
             )
         return data
 
@@ -179,9 +173,7 @@ def tiktok_organic_source(
         new_tokens = _refresh_access_token(client_key, client_secret, stored_rt)
         tokens["access_token"] = new_tokens["access_token"]
         tokens["expires_at"] = now + new_tokens["expires_in"]
-        state["tiktok_organic_refresh_token"] = new_tokens.get(
-            "refresh_token", stored_rt
-        )
+        state["tiktok_organic_refresh_token"] = new_tokens.get("refresh_token", stored_rt)
 
     access_token = tokens["access_token"]
 
@@ -208,9 +200,7 @@ def main():
         clients_dir = "/app/clients"
         if not os.path.exists(clients_dir):
             clients_dir = os.path.normpath(
-                os.path.join(
-                    os.path.dirname(os.path.abspath(__file__)), "..", "..", "clients"
-                )
+                os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "clients")
             )
     client_file = f"{clients_dir}/{args.client}.yml"
 
@@ -238,19 +228,14 @@ def main():
     client_secret = os.environ[connector["client_secret_env"]]
     refresh_token = os.environ[connector["refresh_token_env"]]
 
-    print(
-        f"[TIKTOK_ORGANIC] Extracting data for client"
-        f" '{args.client}' (open_id {open_id})..."
-    )
+    print(f"[TIKTOK_ORGANIC] Extracting data for client '{args.client}' (open_id {open_id})...")
 
     pipeline = dlt.pipeline(
         pipeline_name=f"tiktok_organic_{args.client}",
         destination="postgres",
         dataset_name="raw_tiktok_organic",
     )
-    info = pipeline.run(
-        tiktok_organic_source(open_id, client_key, client_secret, refresh_token)
-    )
+    info = pipeline.run(tiktok_organic_source(open_id, client_key, client_secret, refresh_token))
     print(f"[TIKTOK_ORGANIC] Done: {info}")
 
 

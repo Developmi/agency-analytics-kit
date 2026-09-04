@@ -19,10 +19,12 @@ def _mock_json(data):
 
 
 def _batch_response(core_body, engagement_body):
-    return _mock_json([
-        {"code": 200, "body": json.dumps(core_body)},
-        {"code": 200, "body": json.dumps(engagement_body)},
-    ])
+    return _mock_json(
+        [
+            {"code": 200, "body": json.dumps(core_body)},
+            {"code": 200, "body": json.dumps(engagement_body)},
+        ]
+    )
 
 
 def test_page_posts_success(monkeypatch):
@@ -216,17 +218,17 @@ def test_rate_limit_retry(monkeypatch):
                         "id": "post_1",
                         "likes": {"summary": {"total_count": 0}},
                         "comments": {"summary": {"total_count": 0}},
-                "r_like": {"summary": {"total_count": 0}},
-                "r_love": {"summary": {"total_count": 0}},
-                "r_wow": {"summary": {"total_count": 0}},
-                "r_haha": {"summary": {"total_count": 0}},
-                "r_sad": {"summary": {"total_count": 0}},
-                "r_angry": {"summary": {"total_count": 0}},
+                        "r_like": {"summary": {"total_count": 0}},
+                        "r_love": {"summary": {"total_count": 0}},
+                        "r_wow": {"summary": {"total_count": 0}},
+                        "r_haha": {"summary": {"total_count": 0}},
+                        "r_sad": {"summary": {"total_count": 0}},
+                        "r_angry": {"summary": {"total_count": 0}},
                     }
                 ],
                 "paging": {"next": None},
-                },
-            )
+            },
+        )
 
     monkeypatch.setattr(f"{MODULE}.requests.post", mock_post)
     monkeypatch.setattr(f"{MODULE}.time.sleep", lambda s: None)
@@ -243,9 +245,7 @@ def test_rate_limit_retry(monkeypatch):
 
 def test_token_expired(monkeypatch):
     error_data = {"error": {"code": 190, "message": "Token expired"}}
-    monkeypatch.setattr(
-        f"{MODULE}.requests.post", lambda url, params=None: _mock_json(error_data)
-    )
+    monkeypatch.setattr(f"{MODULE}.requests.post", lambda url, params=None: _mock_json(error_data))
 
     from run_facebook import facebook_page_source
 
@@ -286,8 +286,8 @@ def test_pagination(monkeypatch):
                     }
                 ],
                 "paging": {"next": None},
-                },
-            ),
+            },
+        ),
         _batch_response(
             {
                 "data": [
@@ -317,9 +317,7 @@ def test_pagination(monkeypatch):
         ),
     ]
 
-    monkeypatch.setattr(
-        f"{MODULE}.requests.post", lambda url, params=None: responses.pop(0)
-    )
+    monkeypatch.setattr(f"{MODULE}.requests.post", lambda url, params=None: responses.pop(0))
     monkeypatch.setattr(f"{MODULE}.time.sleep", lambda s: None)
 
     from run_facebook import facebook_page_source

@@ -37,6 +37,7 @@ sources:
     tables:
       - name: media
       - name: insights_daily
+      - name: insights_totals
       - name: business_profile
 
   - name: raw_tiktok_organic
@@ -51,8 +52,19 @@ sources:
     schema: raw_youtube
     tables:
       - name: channel_stats
+      - name: uploaded_videos
       - name: videos
       - name: video_daily_analytics
+      - name: video_analytics
+      - name: traffic_source_analytics
+      - name: device_analytics
+      - name: country_analytics
+      - name: playlists
+      - name: playlist_items
+      - name: comment_threads
+      - name: channel_sections
+      - name: video_categories
+      - name: captions
 
   - name: raw_pinterest
     database: agency_dw

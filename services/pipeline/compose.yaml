@@ -9,17 +9,19 @@ services:
     environment:
       CLIENTS_DIR: /app/clients
       DESTINATION__POSTGRES__CREDENTIALS__HOST: postgres
-      DBT_TARGET_PATH: /tmp/dbt_target
-      DBT_LOG_PATH: /tmp/dbt_logs
     volumes:
       - ../../clients:/app/clients
       - ../../src:/app/src
     healthcheck:
-      test: ["CMD", "python3", "-c", "import sys; sys.exit(0)"]
+      # Healthcheck real (spec B3, design D3): verifica venv + import del
+      # paquete agency_analytics + CLI dbt + reachability TCP a Postgres.
+      # DBT_TARGET_PATH/DBT_LOG_PATH se eliminaron (D4): dbt-core no las lee;
+      # los paths se fijan en dbt_project.yml y son regenerables (B4).
+      test: ["CMD-SHELL", "python3 -c \"import agency_analytics\" && dbt --version >/dev/null 2>&1 && python3 -c \"import socket,os; socket.create_connection((os.environ.get('POSTGRES_HOST','agency_postgres'),5432),2).close()\""]
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 15s
     stdin_open: true
     tty: true
     networks:

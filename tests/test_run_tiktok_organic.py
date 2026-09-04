@@ -22,16 +22,18 @@ def _ok_response(data: dict) -> dict:
 
 
 def test_profile_stats(monkeypatch):
-    stats_response = _ok_response({
-        "data": {
-            "user": {
-                "follower_count": 10000,
-                "following_count": 500,
-                "likes_count": 50000,
-                "video_count": 200,
+    stats_response = _ok_response(
+        {
+            "data": {
+                "user": {
+                    "follower_count": 10000,
+                    "following_count": 500,
+                    "likes_count": 50000,
+                    "video_count": 200,
+                }
             }
         }
-    })
+    )
 
     def mock_request(method, url, **kwargs):
         assert method == "GET"
@@ -64,23 +66,25 @@ def test_profile_stats(monkeypatch):
 
 
 def test_videos_organic(monkeypatch):
-    videos_response = _ok_response({
-        "data": {
-            "videos": [
-                {
-                    "id": "video_1",
-                    "title": "My first video",
-                    "create_time": 1700000000,
-                    "like_count": 150,
-                    "comment_count": 20,
-                    "share_count": 10,
-                    "view_count": 5000,
-                }
-            ],
-            "cursor": 0,
-            "has_more": False,
+    videos_response = _ok_response(
+        {
+            "data": {
+                "videos": [
+                    {
+                        "id": "video_1",
+                        "title": "My first video",
+                        "create_time": 1700000000,
+                        "like_count": 150,
+                        "comment_count": 20,
+                        "share_count": 10,
+                        "view_count": 5000,
+                    }
+                ],
+                "cursor": 0,
+                "has_more": False,
+            }
         }
-    })
+    )
 
     def mock_request(method, url, **kwargs):
         assert method == "POST"
@@ -124,50 +128,54 @@ def test_videos_pagination(monkeypatch):
         call_count += 1
         if call_count == 1:
             return _mock_response(
-                _ok_response({
+                _ok_response(
+                    {
+                        "data": {
+                            "videos": [
+                                {
+                                    "id": "v1",
+                                    "title": "V1",
+                                    "create_time": 1700000001,
+                                    "like_count": 1,
+                                    "comment_count": 0,
+                                    "share_count": 0,
+                                    "view_count": 10,
+                                },
+                                {
+                                    "id": "v2",
+                                    "title": "V2",
+                                    "create_time": 1700000002,
+                                    "like_count": 2,
+                                    "comment_count": 0,
+                                    "share_count": 0,
+                                    "view_count": 20,
+                                },
+                            ],
+                            "cursor": "next_cursor",
+                            "has_more": True,
+                        }
+                    }
+                )
+            )
+        return _mock_response(
+            _ok_response(
+                {
                     "data": {
                         "videos": [
                             {
-                                "id": "v1",
-                                "title": "V1",
-                                "create_time": 1700000001,
-                                "like_count": 1,
+                                "id": "v3",
+                                "title": "V3",
+                                "like_count": 3,
                                 "comment_count": 0,
                                 "share_count": 0,
-                                "view_count": 10,
-                            },
-                            {
-                                "id": "v2",
-                                "title": "V2",
-                                "create_time": 1700000002,
-                                "like_count": 2,
-                                "comment_count": 0,
-                                "share_count": 0,
-                                "view_count": 20,
+                                "view_count": 30,
                             },
                         ],
-                        "cursor": "next_cursor",
-                        "has_more": True,
+                        "cursor": "",
+                        "has_more": False,
                     }
-                })
-            )
-        return _mock_response(
-            _ok_response({
-                "data": {
-                    "videos": [
-                        {
-                            "id": "v3",
-                            "title": "V3",
-                            "like_count": 3,
-                            "comment_count": 0,
-                            "share_count": 0,
-                            "view_count": 30,
-                        },
-                    ],
-                    "cursor": "",
-                    "has_more": False,
                 }
-            })
+            )
         )
 
     monkeypatch.setattr(f"{MODULE}.requests.request", mock_request)
@@ -196,16 +204,18 @@ def test_token_auto_refresh(monkeypatch):
         "expires_in": 86400,
     }
 
-    stats_response = _ok_response({
-        "data": {
-            "user": {
-                "follower_count": 100,
-                "following_count": 10,
-                "likes_count": 500,
-                "video_count": 5,
+    stats_response = _ok_response(
+        {
+            "data": {
+                "user": {
+                    "follower_count": 100,
+                    "following_count": 10,
+                    "likes_count": 500,
+                    "video_count": 5,
+                }
             }
         }
-    })
+    )
 
     refresh_called = False
 
@@ -246,16 +256,18 @@ def test_token_auto_refresh_uses_stored_refresh_token(monkeypatch):
         "expires_in": 86400,
     }
 
-    stats_response = _ok_response({
-        "data": {
-            "user": {
-                "follower_count": 1,
-                "following_count": 1,
-                "likes_count": 1,
-                "video_count": 1,
+    stats_response = _ok_response(
+        {
+            "data": {
+                "user": {
+                    "follower_count": 1,
+                    "following_count": 1,
+                    "likes_count": 1,
+                    "video_count": 1,
+                }
             }
         }
-    })
+    )
 
     used_refresh = []
 
@@ -353,16 +365,18 @@ def test_rate_limit_backoff(monkeypatch):
         if call_count == 1:
             return _mock_response({"error": {"code": 40004, "message": "Rate limit"}})
         return _mock_response(
-            _ok_response({
-                "data": {
-                    "user": {
-                        "follower_count": 100,
-                        "following_count": 10,
-                        "likes_count": 500,
-                        "video_count": 5,
+            _ok_response(
+                {
+                    "data": {
+                        "user": {
+                            "follower_count": 100,
+                            "following_count": 10,
+                            "likes_count": 500,
+                            "video_count": 5,
+                        }
                     }
                 }
-            })
+            )
         )
 
     monkeypatch.setattr(f"{MODULE}.requests.request", mock_request)
@@ -396,16 +410,18 @@ def test_request_error_retry(monkeypatch):
 
             raise r.RequestException("Connection reset")
         return _mock_response(
-            _ok_response({
-                "data": {
-                    "user": {
-                        "follower_count": 100,
-                        "following_count": 10,
-                        "likes_count": 500,
-                        "video_count": 5,
+            _ok_response(
+                {
+                    "data": {
+                        "user": {
+                            "follower_count": 100,
+                            "following_count": 10,
+                            "likes_count": 500,
+                            "video_count": 5,
+                        }
                     }
                 }
-            })
+            )
         )
 
     monkeypatch.setattr(f"{MODULE}.requests.request", mock_request)

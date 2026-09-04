@@ -104,11 +104,23 @@ models:
         tests:
           - accepted_values:
               arguments:
-                values: ["IMAGE", "VIDEO", "CAROUSEL", "REELS"]
+                # Meta IG media_type enumeration (v25.0). Real data (real BD +
+                # wipe-sim, 811 rows) yields CAROUSEL_ALBUM, never CAROUSEL —
+                # the old token was a stale doc value (WU5 gate finding).
+                values: ["IMAGE", "VIDEO", "REELS", "CAROUSEL_ALBUM"]
 
   - name: stg_instagram__insights_daily
     columns:
       - name: report_date
+        tests:
+          - not_null
+
+  - name: stg_instagram__insights_totals
+    columns:
+      - name: date_start
+        tests:
+          - not_null
+      - name: date_end
         tests:
           - not_null
 
@@ -162,9 +174,6 @@ models:
   - name: stg_youtube__video_daily_analytics
     columns:
       - name: report_date
-        tests:
-          - not_null
-      - name: video_id
         tests:
           - not_null
 

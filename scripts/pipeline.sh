@@ -46,21 +46,40 @@ Status: <code>${status:-no encontrado}</code>"
   fi
 }
 
-# ─── Map connector name → dbt staging models ───────────────────────────────
-get_connector_models() {
-  case "$1" in
-    meta)          echo "stg_meta__ads stg_meta__campaigns" ;;
-    tiktok)        echo "stg_tiktok__ads stg_tiktok__campaigns" ;;
-    google)        echo "stg_google__ads stg_google__campaigns" ;;
-    facebook)      echo "stg_facebook__page_posts stg_facebook__feed stg_facebook__page_insights_daily" ;;
-    instagram)     echo "stg_instagram__media stg_instagram__insights_daily" ;;
-    tiktok_organic) echo "stg_tiktok_organic__profile_stats stg_tiktok_organic__videos_organic" ;;
-    youtube)       echo "stg_youtube__channel_stats stg_youtube__videos stg_youtube__video_daily_analytics" ;;
-    pinterest)     echo "stg_pinterest__boards stg_pinterest__pins stg_pinterest__board_insights" ;;
-    ga4)           echo "stg_ga4__daily_stats stg_ga4__page_analytics stg_ga4__event_analytics" ;;
-    gtm)           echo "stg_gtm__containers stg_gtm__tags stg_gtm__triggers" ;;
-    public)        echo "stg_public__pipeline_runs stg_public__pipeline_run_steps" ;;
-  esac
+# ─── Plan dbt + veredicto vía módulo puro (spec A1/A3/A4, design D1) ───────
+# El mapeo conector→modelos, la cadena de monitoreo y el flag de inversión
+# viven en src/agency_analytics/pipeline_plan.py (testeado en WU1); este
+# script solo consume su JSON. Se ejecuta con -w /app/src para que el bind
+# mount (fresco) preceda a la copia antigua en site-packages del image.
+
+pipeline_plan() {
+  # Invoca el módulo dentro del container: `plan`|`status` → una línea JSON.
+  docker exec -w /app/src agency_pipeline python3 -m agency_analytics.pipeline_plan "$@"
+}
+
+plan_select() {
+  # $1 = JSON del plan → imprime los modelos separados por espacio.
+  docker exec -w /app/src agency_pipeline python3 -c '
+import json, sys
+print(" ".join(json.loads(sys.argv[1])["models"]))
+' "$1"
+}
+
+plan_investment() {
+  # $1 = JSON del plan → imprime "true"|"false".
+  docker exec -w /app/src agency_pipeline python3 -c '
+import json, sys
+plan = json.loads(sys.argv[1])
+print("true" if plan["investment"] else "false")
+' "$1"
+}
+
+status_verdict() {
+  # $1 = JSON de status → imprime "success"|"failed".
+  docker exec -w /app/src agency_pipeline python3 -c '
+import json, sys
+print(json.loads(sys.argv[1])["status"])
+' "$1"
 }
 
 # ─── YAML helper (usa pyyaml dentro del container) ──────────────────────────
@@ -229,11 +248,13 @@ for client_file in "$CLIENTS_DIR"/*.yml; do
   connectors_failed=0
   dbt_status="skipped"
 
-  # Contar conectores habilitados
+  # Contar conectores habilitados y armar la lista para el plan dbt
+  enabled_connectors=""
   while IFS= read -r conn; do
     [ -z "$conn" ] && continue
     if [ "$(yaml_get "$client_file" ".connectors.${conn}.enabled")" = "true" ]; then
       connectors_total=$((connectors_total + 1))
+      enabled_connectors="${enabled_connectors}${enabled_connectors:+,}${conn}"
     fi
   done < <(yaml_keys "$client_file" ".connectors")
 
@@ -241,6 +262,9 @@ for client_file in "$CLIENTS_DIR"/*.yml; do
   while IFS='|' read -r conn_name conn_flag; do
     conn_name="${conn_name%% }"
     if [ "$conn_flag" != "true" ]; then
+      # Auditoría completa (A2): el conector deshabilitado queda como skipped
+      skip_step_id=$(pipeline_start_step "$run_id" "dlt_${conn_name}" "$conn_name")
+      pipeline_finish_step "$skip_step_id" "skipped" "conector deshabilitado en el cliente"
       continue
     fi
 
@@ -262,67 +286,54 @@ Conector: <code>${conn_name}</code>"
     echo "${conn}|$(yaml_get "$client_file" ".connectors.${conn}.enabled")"
   done < <(yaml_keys "$client_file" ".connectors"))
 
-  # Transformación dbt (solo si al menos un conector funcionó)
-  if [ "$connectors_ok" -gt 0 ]; then
-    step_id=$(pipeline_start_step "$run_id" "dbt_run")
+  # Transformación dbt — SIEMPRE corre (A2): sin conectores habilitados el
+  # plan devuelve solo la cadena de monitoreo y dbt igualmente se ejecuta.
+  step_id=$(pipeline_start_step "$run_id" "dbt_run")
 
-    # Leer schema del cliente desde YAML
-    client_schema_val=$(yaml_get "$client_file" '.schema')
+  # Leer schema del cliente desde YAML
+  client_schema_val=$(yaml_get "$client_file" '.schema')
 
-    # Construir selector dinámico de modelos según conectores habilitados
-    dbt_select=""
-    has_meta="false"
-    has_tiktok="false"
-    has_google="false"
-    while IFS= read -r conn; do
-      [ -z "$conn" ] && continue
-      enabled=$(yaml_get "$client_file" ".connectors.${conn}.enabled")
-      if [ "$enabled" = "true" ]; then
-        dbt_select="$dbt_select $(get_connector_models "$conn")"
-        case "$conn" in
-          meta)   has_meta="true"   ;;
-          tiktok) has_tiktok="true"  ;;
-          google) has_google="true"  ;;
-        esac
-      fi
-    done < <(yaml_keys "$client_file" ".connectors")
+  # Una sola llamada al plan por cliente (A4): modelos = conectores
+  # habilitados + MONITORING_CHAIN con sus padres stg_public__; el flag de
+  # inversión (meta+tiktok+google) decide los marts de inversión.
+  plan_json=$(pipeline_plan plan --connectors "${enabled_connectors}")
+  dbt_select=$(plan_select "$plan_json")
+  investment=$(plan_investment "$plan_json")
 
-    # Modelos de monitoreo de pipeline siempre disponibles
-    dbt_select="$dbt_select int_pipeline_daily_summary pipeline_monitoring"
-
-    # int_unified_spend y sus marts requieren los 3 (meta + tiktok + google)
-    if [ "$has_meta" = "true" ] && [ "$has_tiktok" = "true" ] && [ "$has_google" = "true" ]; then
-      dbt_select="$dbt_select int_unified_spend ad_spend_summary campaign_performance"
-      log "dbt: incluidos modelos de inversión publicitaria (meta+tiktok+google)"
-    else
-      log "dbt: modelos de inversión omitidos (faltan meta, tiktok o google)"
-    fi
-
-    log "dbt: seleccionados${dbt_select}"
-    dbt_select="${dbt_select## }"
-    dbt_vars='{"client_id": "'"${client_id}"'", "client_schema": "'"${client_schema_val}"'"}'
-    if docker exec -w /app/src/dbt_project agency_pipeline \
-         dbt run --select "${dbt_select}" \
-                 --vars "${dbt_vars}" \
-                 --profiles-dir .; then
-      dbt_status="success"
-      pipeline_finish_step "$step_id" "success"
-    else
-      dbt_status="failed"
-      pipeline_finish_step "$step_id" "failed" "dbt run falló"
-      send_telegram "⚠️ <b>Fallo dbt</b>
-Cliente: <code>${client_id}</code>"
-      log "ERROR: dbt falló para ${client_id}."
-    fi
+  if [ "$investment" = "true" ]; then
+    # Los marts de inversión los agrega el caller (design D1); el flag sale
+    # del módulo (INVESTMENT_MARTS = int_unified_spend ad_spend_summary campaign_performance).
+    dbt_select="${dbt_select} int_unified_spend ad_spend_summary campaign_performance"
+    log "dbt: incluidos modelos de inversión publicitaria (meta+tiktok+google)"
+  else
+    log "dbt: modelos de inversión omitidos (faltan meta, tiktok o google)"
   fi
 
-  # Finalizar run
-  if [ "$connectors_failed" -gt 0 ]; then
-    pipeline_finish_run "$run_id" "failed" "$connectors_ok" "$connectors_failed" "$dbt_status"
-    overall_failed=$((overall_failed + 1))
+  log "dbt: seleccionados: ${dbt_select}"
+  dbt_vars='{"client_id": "'"${client_id}"'", "client_schema": "'"${client_schema_val}"'"}'
+  if docker exec -w /app/src/dbt_project agency_pipeline \
+       dbt run --select "${dbt_select}" \
+               --vars "${dbt_vars}" \
+               --profiles-dir .; then
+    dbt_status="success"
+    pipeline_finish_step "$step_id" "success"
   else
-    pipeline_finish_run "$run_id" "success" "$connectors_ok" "$connectors_failed" "$dbt_status"
+    dbt_status="failed"
+    pipeline_finish_step "$step_id" "failed" "dbt run falló"
+    send_telegram "⚠️ <b>Fallo dbt</b>
+Cliente: <code>${client_id}</code>"
+    log "ERROR: dbt falló para ${client_id}."
+  fi
+
+  # Finalizar run — veredicto del módulo (A3): failed si falló algún conector
+  # O dbt; success solo cuando ambos lados están limpios.
+  run_verdict=$(pipeline_plan status --ok "$connectors_ok" --failed "$connectors_failed" --dbt-status "$dbt_status")
+  run_status_val=$(status_verdict "$run_verdict")
+  pipeline_finish_run "$run_id" "$run_status_val" "$connectors_ok" "$connectors_failed" "$dbt_status"
+  if [ "$run_status_val" = "success" ]; then
     overall_ok=$((overall_ok + 1))
+  else
+    overall_failed=$((overall_failed + 1))
   fi
 
   log "Cliente ${client_id}: ${connectors_ok}/${connectors_total} conectores OK, dbt: ${dbt_status}"

@@ -87,9 +87,7 @@ def _execute_batch(batch_requests, access_token):
                 wait = min(BACKOFF_BASE * (2**attempt), BACKOFF_MAX)
                 time.sleep(wait)
                 continue
-            raise Exception(
-                f"[FACEBOOK] Batch request failed after {MAX_RETRIES} retries: {e}"
-            )
+            raise Exception(f"[FACEBOOK] Batch request failed after {MAX_RETRIES} retries: {e}")
 
         if isinstance(results, dict) and "error" in results:
             code = results["error"].get("code", 0)
@@ -135,9 +133,7 @@ def _fetch_page_batch(endpoint, page_id, access_token, cursor=None, limit=50):
     batch = [
         {
             "method": "GET",
-            "relative_url": (
-                f"{page_id}/{endpoint}?fields={fields_core}&limit={limit}{after}"
-            ),
+            "relative_url": (f"{page_id}/{endpoint}?fields={fields_core}&limit={limit}{after}"),
         },
         {
             "method": "GET",

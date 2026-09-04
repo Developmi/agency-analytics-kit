@@ -89,6 +89,29 @@ mindmap
 | GA4 | Analytics | ❌ No | ⚠️ Code + tests | Service account auth required |
 | GTM | Analytics | ❌ No | ⚠️ Code + tests | API v2 |
 
+### Instagram diagnostics probe (read-only)
+
+`agency_analytics/ig_probe.py` is a **read-only** diagnostic CLI for the
+Instagram Business connector (never part of the scheduled pipeline). It answers
+which account-insights metrics respond today and with which `metric_type`, the
+real retention horizon per trailing window, which breakdown axes work per
+metric, and eligibility below 100 followers — the data that drives the
+`insights_daily` / `insights_totals` split and backfill decisions.
+
+```bash
+docker exec -w /app/src agency_pipeline \
+  python -m agency_analytics.ig_probe --client example --read-only
+
+# Local run, write the JSON report to a file, skip breakdown calls:
+uv run python -m agency_analytics.ig_probe --client example --read-only \
+  --skip-breakdowns --output /tmp/ig_probe_report.json
+```
+
+It makes no destructive calls and writes to no table (spec IG4). Full CLI
+reference, report schema and call budget live in the module docstring
+(`src/agency_analytics/ig_probe.py`). `scripts/pipeline.sh` is intentionally
+unchanged: the probe is a manual diagnostics entry point, not a pipeline step.
+
 ---
 
 ## Quick Start

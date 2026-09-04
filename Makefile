@@ -12,6 +12,7 @@ SHELL := /bin/bash
 .PHONY: docker-build docker-build-pipeline
 .PHONY: docker-up docker-up-all docker-down docker-logs
 .PHONY: docker-db docker-pipeline docker-metabase
+.PHONY: db-bootstrap
 
 # === HELP ==================================================================
 
@@ -101,12 +102,12 @@ docker-up-all:  ## Start Postgres + Pipeline + Metabase
 docker-down:    ## Stop all services
 	-docker compose -f services/db/compose.yaml down 2>/dev/null
 	-docker compose -f services/pipeline/compose.yaml down 2>/dev/null
-	-docker compose -f services/metabase/compose.yaml down 2>/dev/null
+	-docker compose -f services/db/compose.yaml -f services/metabase/compose.yaml down 2>/dev/null
 
 docker-logs:    ## Tail logs from all services
 	@docker compose -f services/db/compose.yaml logs -f &
 	@docker compose -f services/pipeline/compose.yaml logs -f &
-	@docker compose -f services/metabase/compose.yaml logs -f &
+	@docker compose -f services/db/compose.yaml -f services/metabase/compose.yaml logs -f metabase &
 	@wait
 
 # === DOCKER - SERVICES =====================================================
@@ -118,4 +119,29 @@ docker-pipeline: ## Start pipeline worker
 	docker compose -f services/pipeline/compose.yaml up -d
 
 docker-metabase: ## Start Metabase
-	docker compose -f services/metabase/compose.yaml up -d
+	docker compose -f services/db/compose.yaml -f services/metabase/compose.yaml up -d metabase
+
+# === BOOTSTRAP ==============================================================
+
+db-bootstrap:   ## Bootstrap dbt monitoring chain on a clean DB (requires: make docker-up)
+	@echo "==> db-bootstrap: esperando agency_postgres y agency_pipeline healthy..."
+	@for c in agency_postgres agency_pipeline; do
+		ok=""
+		for i in $$(seq 1 60); do
+			s="$$(docker inspect --format='{{.State.Health.Status}}' "$$c" 2>/dev/null || echo missing)"
+			if [ "$$s" = "healthy" ]; then ok=1; break; fi
+			sleep 2
+		done
+		if [ -z "$$ok" ]; then echo "ERROR: $$c no está healthy ($$s)"; exit 1; fi
+		echo "    $$c: healthy"
+	done
+	@chain="$$(docker exec -w /app/src agency_pipeline python3 -c 'from agency_analytics.pipeline_plan import MONITORING_CHAIN; print(" ".join(MONITORING_CHAIN))')" || exit 1
+	@if [ -z "$$chain" ]; then echo "ERROR: cadena de monitoreo vacía (módulo pipeline_plan)"; exit 1; fi
+	@echo "==> db-bootstrap: dbt build de la cadena de monitoreo (sin datos externos): $$chain"
+	@docker exec -w /app/src/dbt_project agency_pipeline \
+		dbt build --select $$chain --profiles-dir . \
+		|| { echo "ERROR: dbt build de la cadena falló"; exit 1; }
+	@echo "==> db-bootstrap: OK — cadena de monitoreo creada (post-wipe, sin datos externos)."
+	@echo "    El grafo completo (conectores) requiere cargas dlt previas: las vistas"
+	@echo "    staging sobre schemas raw_* vacíos fallan. Corré 'make pipeline' (o el"
+	@echo "    pipeline nocturno) para poblar raw_* con dlt antes del build completo."

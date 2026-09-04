@@ -4,7 +4,8 @@ model-paths: ["models"]
 macro-paths: ["macros"]
 seed-paths: ["seeds"]
 analysis-paths: ["analyses"]
-# target-path and log-path set via DBT_TARGET_PATH / DBT_LOG_PATH env vars
+target-path: target   # D4/B4: explícito y regenerable (gitignored, bind-mounted)
+log-path: logs        # dbt-core no lee DBT_TARGET_PATH/DBT_LOG_PATH (eran no-ops)
 
 vars:
   client_id: "default"

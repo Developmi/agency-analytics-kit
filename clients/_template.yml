@@ -1,56 +1,56 @@
-client_id: nuevo_cliente
-client_name: "Nombre Comercial"
-schema: client_nuevo_cliente
+client_id: new_client
+client_name: "New Client Name"
+schema: client_new_client
 active: false
 
 connectors:
   meta:
     enabled: false
     account_id: ""
-    token_env: META_ACCESS_TOKEN_NUEVO_CLIENTE
+    token_env: META_ACCESS_TOKEN_NEW_CLIENT
   tiktok:
     enabled: false
     account_id: ""
-    token_env: TIKTOK_ACCESS_TOKEN_NUEVO_CLIENTE
+    token_env: TIKTOK_ACCESS_TOKEN_NEW_CLIENT
   google:
     enabled: false
     customer_id: ""
-    token_env: GOOGLE_ADS_TOKEN_NUEVO_CLIENTE
+    token_env: GOOGLE_ADS_TOKEN_NEW_CLIENT
 
   facebook:
     enabled: false
     page_id: ""
-    token_env: FACEBOOK_ACCESS_TOKEN_NUEVO_CLIENTE
+    token_env: FACEBOOK_ACCESS_TOKEN_NEW_CLIENT
     insights_days_back: 729
   instagram:
     enabled: false
     instagram_business_id: ""
-    token_env: INSTAGRAM_ACCESS_TOKEN_NUEVO_CLIENTE
+    token_env: INSTAGRAM_ACCESS_TOKEN_NEW_CLIENT
     insights_days_back: 729
   tiktok_organic:
     enabled: false
     open_id: ""
-    token_env: TIKTOK_ORGANIC_ACCESS_TOKEN_NUEVO_CLIENTE
-    client_key_env: TIKTOK_ORGANIC_CLIENT_KEY_NUEVO_CLIENTE
-    client_secret_env: TIKTOK_ORGANIC_CLIENT_SECRET_NUEVO_CLIENTE
-    refresh_token_env: TIKTOK_ORGANIC_REFRESH_TOKEN_NUEVO_CLIENTE
+    token_env: TIKTOK_ORGANIC_ACCESS_TOKEN_NEW_CLIENT
+    client_key_env: TIKTOK_ORGANIC_CLIENT_KEY_NEW_CLIENT
+    client_secret_env: TIKTOK_ORGANIC_CLIENT_SECRET_NEW_CLIENT
+    refresh_token_env: TIKTOK_ORGANIC_REFRESH_TOKEN_NEW_CLIENT
   youtube:
     enabled: false
     channel_id: ""
-    token_env: YOUTUBE_API_KEY_NUEVO_CLIENTE
+    token_env: YOUTUBE_API_KEY_NEW_CLIENT
   pinterest:
     enabled: false
     board_id: ""
-    token_env: PINTEREST_ACCESS_TOKEN_NUEVO_CLIENTE
+    token_env: PINTEREST_ACCESS_TOKEN_NEW_CLIENT
   ga4:
     enabled: false
     property_id: ""
-    token_env: GA4_ACCESS_TOKEN_NUEVO_CLIENTE
+    token_env: GA4_ACCESS_TOKEN_NEW_CLIENT
   gtm:
     enabled: false
     account_path: ""
-    token_env: GTM_ACCESS_TOKEN_NUEVO_CLIENTE
+    token_env: GTM_ACCESS_TOKEN_NEW_CLIENT
 
 dbt:
   tags:
-    - nuevo_cliente
+    - NEW_CLIENT

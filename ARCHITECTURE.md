@@ -269,22 +269,54 @@ check_container() {
 
 ## Postgres Users and Access
 
-Three users with differentiated permissions:
+Access roles are created by the **codified, idempotent init bootstrap** — there is no
+manual SQL to run (spec B6). The Postgres entrypoint executes the scripts in
+`services/db/init/` on the first start of an empty volume, in lexicographic order:
 
-| User | Permissions | Used By |
-|---|---|---|
-| `agency_admin` | Superuser | dlt, dbt, administration |
-| `metabase_reader` | SELECT on `client_*` schemas | Metabase |
-| `pipeline_user` | INSERT/SELECT on `raw_*` and `client_*` schemas | Pipeline worker |
+1. `01-create-pipeline-tables.sql` — monitoring tables `public.pipeline_runs` and
+   `public.pipeline_run_steps` (+ indexes).
+2. `02-bootstrap-rbac.sh` — read-only role, schemas and grants; re-runnable (every
+   statement is idempotent, NFR2).
 
-```sql
--- Create read-only user for Metabase
-CREATE USER metabase_reader WITH PASSWORD 'secure_password';
-GRANT CONNECT ON DATABASE agency_dw TO metabase_reader;
-GRANT USAGE ON SCHEMA client_acme TO metabase_reader;
-GRANT SELECT ON ALL TABLES IN SCHEMA client_acme TO metabase_reader;
-ALTER DEFAULT PRIVILEGES IN SCHEMA client_acme GRANT SELECT ON TABLES TO metabase_reader;
+| Role | Permissions | Used By | Created By |
+|---|---|---|---|
+| `agency_admin` (env `POSTGRES_USER`) | Superuser / object owner | dlt, dbt, administration | postgres image (env) |
+| `metabase_reader` | LOGIN; SELECT on `public`, `staging`, `raw_*` | Metabase | init `02-bootstrap-rbac.sh` |
+
+`02-bootstrap-rbac.sh` idempotently: (1) creates the `metabase_reader` role with a
+guard (on re-run it only syncs LOGIN/PASSWORD from `METABASE_READER_PASSWORD`, which
+must match `MB_DB_PASS` of Metabase); (2) creates the `staging` schema plus the 10
+`raw_*` schemas; (3) applies `GRANT USAGE` on the schemas and `GRANT SELECT` on the
+`public` monitoring tables; (4) applies `ALTER DEFAULT PRIVILEGES FOR ROLE
+${POSTGRES_USER}` in `public`, `staging`, and each `raw_*` — since the future object
+creator (dlt/dbt) is `POSTGRES_USER`, new objects stay readable by `metabase_reader`
+**without manual GRANT** (spec B2).
+
+### Post-wipe recovery cycle (resilience, spec B)
+
+The whole Docker state is disposable: `down -v` removes the `pgdata` volume and the
+next start regenerates everything — zero manual SQL (NFR1):
+
+```bash
+# 1) Destroy the whole Docker state
+docker compose -f services/db/compose.yaml down -v        # removes the pgdata volume
+docker compose -f services/pipeline/compose.yaml down     # stops the dbt/dlt worker
+
+# 2) Rebuild from source (local image, root Dockerfile — never trust cached images, D1)
+docker compose -f services/db/compose.yaml up -d          # init 01+02 run on the empty volume
+docker compose -f services/pipeline/compose.yaml up -d --build   # image rebuilt
+
+# 3) Verify and bootstrap the monitoring chain
+docker ps            # both containers "healthy" (real compose healthchecks, spec B3)
+make db-bootstrap    # dbt build of the monitoring chain on the clean DB
 ```
+
+Note: `make db-bootstrap` rebuilds the monitoring chain
+(`stg_public__*` → `int_pipeline_daily_summary` → `pipeline_monitoring`) on a clean DB
+with no external data. The **full graph** (per-connector models and investment marts)
+requires prior dlt loads that populate the `raw_*` schemas: staging views over empty
+raw tables fail. Run `make pipeline` (or the nightly pipeline) to populate `raw_*`
+before a full build.
 
 ---
 
