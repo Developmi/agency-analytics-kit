@@ -28,6 +28,10 @@ Thumbs.db
 .env
 !.env.example
 
+# Client configs — real client YAMLs are local-only and must never be staged;
+# the repo tracks only the sample clients (_template/acme/nike).
+clients/*.yml
+
 # Secrets / credentials
 *.pem
 *.key
@@ -73,8 +77,8 @@ openspec/
 sbom.*.json
 *.attestation
 
-# Package management
-uv.lock
+# Package management — uv.lock is intentionally TRACKED (reproducible
+# `uv sync --frozen`; CI and the Dockerfile depend on it).
 
 # Logs / temp
 *.log

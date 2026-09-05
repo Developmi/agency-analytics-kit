@@ -1,7 +1,22 @@
-# ── Blocklist ──
+# ─────────────────────────────────────────────────────────────────────────────
+# .dockerignore — deny-all + explicit allowlist (leak-proof build context)
+#
+# Anything NOT allowlisted below is excluded from the build context, so the
+# image can never carry local secrets or client configs even if a future
+# Dockerfile COPY adds a path. Those live outside the image and are
+# bind-mounted at runtime by services/pipeline/compose.yaml instead:
+#   .env*           secrets, root + services/            → never included
+#   clients/*.yml   real client configs                  → never included
+#   .git/, data/    repo history + local data            → never included
+#   target/, logs/  build output + logs                  → never included
+#   caches, .venv   local tooling/caches                 → never included
+#   docs/           documentation (not needed to build)  → never included
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Deny everything ──
 *
 
-# ── Allowlist (builder stage needs these) ──
+# ── Allowlist (builder stage needs exactly these) ──
 !Dockerfile
 !pyproject.toml
 !uv.lock
