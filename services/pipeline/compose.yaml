@@ -5,7 +5,8 @@ services:
       dockerfile: Dockerfile
     container_name: agency_pipeline
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       CLIENTS_DIR: /app/clients
       DESTINATION__POSTGRES__CREDENTIALS__HOST: postgres

@@ -3,7 +3,8 @@ services:
     image: postgres:16-alpine
     container_name: agency_postgres
     env_file:
-      - .env
+      - path: .env
+        required: false
     ports:
       - "127.0.0.1:5432:5432"
     volumes:

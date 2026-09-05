@@ -3,7 +3,8 @@ services:
     image: metabase/metabase:latest
     container_name: agency_metabase
     env_file:
-      - .env
+      - path: .env
+        required: false
     ports:
       - "3000:3000"
     depends_on:
