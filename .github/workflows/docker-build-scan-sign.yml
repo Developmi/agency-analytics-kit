@@ -1,0 +1,242 @@
+---
+name: Docker build, scan & sign
+
+# PRs to main are built and scanned (amd64 + arm64) but NEVER pushed.
+# A pushed v* tag is the SOLE publish trigger: multi-arch push to GHCR,
+# CycloneDX SBOM, keyless cosign signature, SLSA attestation. No :latest is
+# ever published. Post-push failures roll the published tag back.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "src/**"
+      - ".github/workflows/docker-build-scan-sign.yml"
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: dbss-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Build + scan: runs on every PR and every v* tag push. ──────────────
+  # Least-privilege: contents: read + security-events: write (the latter only
+  # to upload code-scanning SARIF; the upload step is fork-guarded and
+  # continue-on-error). No registry write, no OIDC here.
+  build-scan:
+    name: Build and scan (amd64 + arm64)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8  # v4.2.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4.2.0
+
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567  # v0.3.1
+        with:
+          version: v0.74.0
+
+      # Build each arch locally (load) and gate it with Trivy BEFORE anything
+      # is pushed. Both platforms must pass CRITICAL/HIGH (unfixed) first.
+      - name: Build amd64 image (load)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ghcr.io/developmi/agency-analytics-kit:${{ github.sha }}-scan
+          cache-from: type=gha
+
+      - name: Scan amd64 image (SARIF)
+        run: |
+          trivy image --scanners vuln --severity CRITICAL,HIGH --ignore-unfixed \
+            --skip-version-check --format sarif --output trivy-results.sarif \
+            ghcr.io/developmi/agency-analytics-kit:${{ github.sha }}-scan
+
+      - name: Scan amd64 image (CRITICAL/HIGH gate)
+        run: |
+          trivy image --scanners vuln --severity CRITICAL,HIGH --ignore-unfixed \
+            --skip-version-check --exit-code 1 \
+            ghcr.io/developmi/agency-analytics-kit:${{ github.sha }}-scan
+
+      - name: Build arm64 image (load)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/arm64
+          push: false
+          load: true
+          tags: ghcr.io/developmi/agency-analytics-kit:${{ github.sha }}-scan-arm64
+          cache-from: type=gha
+
+      - name: Scan arm64 image (SARIF)
+        run: |
+          trivy image --scanners vuln --severity CRITICAL,HIGH --ignore-unfixed \
+            --skip-version-check --format sarif --output trivy-results-arm64.sarif \
+            ghcr.io/developmi/agency-analytics-kit:${{ github.sha }}-scan-arm64
+
+      - name: Scan arm64 image (CRITICAL/HIGH gate)
+        run: |
+          trivy image --scanners vuln --severity CRITICAL,HIGH --ignore-unfixed \
+            --skip-version-check --exit-code 1 \
+            ghcr.io/developmi/agency-analytics-kit:${{ github.sha }}-scan-arm64
+
+      # R-CI-3.11: no secrets or client configs baked in — .env and clients/
+      # exist only as runtime bind-mounts, never inside the image.
+      - name: Smoke assert (no /app/.env or /app/clients in image)
+        run: |
+          set -euo pipefail
+          for img in \
+            "ghcr.io/developmi/agency-analytics-kit:${{ github.sha }}-scan" \
+            "ghcr.io/developmi/agency-analytics-kit:${{ github.sha }}-scan-arm64"; do
+            docker run --rm --entrypoint sh "$img" -c \
+              'test ! -e /app/.env && test ! -e /app/clients'
+          done
+
+      # SARIF upload: fork-guarded (a fork PR cannot write security events of
+      # the base repo) and continue-on-error so a SARIF service hiccup never
+      # blocks the pipeline on its own.
+      - name: Upload Trivy SARIF (amd64)
+        if: (!cancelled()) && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938  # v4
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-amd64
+
+      - name: Upload Trivy SARIF (arm64)
+        if: (!cancelled()) && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938  # v4
+        with:
+          sarif_file: trivy-results-arm64.sarif
+          category: trivy-arm64
+
+  # ── Publish: v* tag ONLY (elevated permissions live here, never on PR). ──
+  # Guarded at job level so the permissions (packages/id-token/attestations
+  # write) are never granted on pull_request runs or fork tag pushes.
+  publish:
+    name: Publish multi-arch image, SBOM, sign & attest
+    needs: build-scan
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.event.repository.fork == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8  # v4.2.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4.2.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute OCI created timestamp
+        run: echo "CREATED=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
+      - name: Build and push multi-arch image
+        id: push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/developmi/agency-analytics-kit:${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            SOURCE=${{ github.server_url }}/${{ github.repository }}
+            REVISION=${{ github.sha }}
+            CREATED=${{ env.CREATED }}
+
+      # Post-push (all tag-gated). If any of these fails, the rollback step
+      # below deletes the just-published GHCR version so no consumer can pull
+      # a broken/unsigned artifact.
+      - name: Generate CycloneDX SBOM
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26  # v0.24.2
+        with:
+          image: ghcr.io/developmi/agency-analytics-kit:${{ github.ref_name }}
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
+          artifact-name: sbom-cyclonedx
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5  # v3.10.1
+
+      - name: Sign image (cosign keyless)
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          cosign sign --yes \
+            "ghcr.io/developmi/agency-analytics-kit@${DIGEST}"
+
+      - name: Attest SBOM (cosign keyless)
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          cosign attest --type cyclonedx --predicate sbom.cdx.json --yes \
+            "ghcr.io/developmi/agency-analytics-kit@${DIGEST}"
+
+      - name: Generate SLSA provenance attestation
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2.4.0
+        with:
+          subject-name: ghcr.io/developmi/agency-analytics-kit
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      # Rollback: only when this job actually pushed (digest known) and a
+      # post-push step failed. Fork tag pushes never reach this job (job-level
+      # guard above); the step guard repeats the fork check for defense in
+      # depth. Deletes exactly the GHCR version whose tag == ref_name.
+      - name: Roll back published tag on failure
+        if: failure() && steps.push.outputs.digest != '' && github.event.repository.fork == false
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          org="developmi"
+          pkg="agency-analytics-kit"
+          versions="$(gh api "orgs/${org}/packages/container/${pkg}/versions?per_page=100")"
+          version_id="$(printf '%s' "${versions}" | jq -r --arg tag "${TAG}" \
+            '.[] | select(any(.metadata.container.tags[]; . == $tag)) | .id' | head -n 1)"
+          if [ -z "${version_id}" ]; then
+            echo "::notice::No GHCR version carries tag ${TAG}; nothing to roll back."
+            exit 0
+          fi
+          echo "::warning::Deleting GHCR version ${version_id} (tag ${TAG}) after post-push failure."
+          gh api -X DELETE "orgs/${org}/packages/container/${pkg}/versions/${version_id}" -f confirm=true

@@ -16,7 +16,7 @@ Fixes #(issue)
 
 - [ ] `make lint` (ruff)
 - [ ] `make typecheck` (mypy)
-- [ ] `make test` (pytest - 92 tests should pass)
+- [ ] `make test` (pytest - 186 tests should pass)
 
 ## Checklist
 

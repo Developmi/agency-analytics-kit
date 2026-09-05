@@ -1,0 +1,58 @@
+# Keep dependencies up to date with automated pull requests.
+# Docs: https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+#
+# Base shape mirrors Developmi/caddy-waf-ui (verified 2026-09-04). All updated
+# dependencies are PUBLIC (Docker Hub, ghcr.io/astral-sh, GitHub Actions), so no
+# `registries:` credentials block is needed — zero stored secrets (N1).
+# Base images are digest-pinned in the Dockerfile; dependabot keeps the digests
+# current. `cooldown: default-days: 7` is supported for pip, docker and
+# github-actions (GitHub docs, cooldown option table) and, together with the
+# weekly interval, implements the intended 7-day cadence.
+version: 2
+updates:
+  # Python deps: pyproject.toml + tracked uv.lock (reproducible `uv sync --frozen`).
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "chore(deps):"
+    groups:
+      python-minor-patch:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Docker base images (python:3.12-slim + ghcr.io/astral-sh/uv, both digest-pinned).
+  # Deliberately ungrouped: digest updates are non-semver, so each base-image
+  # bump stays an isolated, reviewable PR (mirrors upstream docker block).
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "chore(deps):"
+
+  # GitHub Actions (SHA-pinned with `# vX.Y.Z` comments — dependabot bumps SHA+comment).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "chore(deps):"
+    groups:
+      actions-minor-patch:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"
