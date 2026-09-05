@@ -1,0 +1,75 @@
+---
+# Pre-commit hooks — Developmi engineering standard, Python-adapted.
+#
+# LOCAL-ONLY dev convenience (spec CI-5.2): CI-1/CI-2 run the same tools
+# directly and never depend on pre-commit. Hook-managed environments
+# self-install their binaries (gitleaks/shellcheck/detect-secrets); the only
+# requirement is the pre-commit framework itself:
+#
+#   uv tool install pre-commit
+#   pre-commit install
+#
+# Python pins mirror the project: ruff = pyproject dev group (`ruff>=0.15.22`);
+# the pre-commit-hooks file-hygiene repo is intentionally omitted (its
+# trailing-whitespace/end-of-file fixers would churn the whole tree in a change
+# whose spec forbids unrelated diffs — documented follow-up).
+repos:
+  # Detect secrets against a committed baseline. The baseline is pre-generated
+  # over the TRACKED file set only (see .secrets.baseline), so local .env files
+  # and untracked client configs are never hashed into the repo. The baseline
+  # file itself is excluded to avoid a self-referential finding on first commit.
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: ["--baseline", ".secrets.baseline"]
+        exclude: |
+          (?x)^(
+            .secrets.baseline
+          )$
+
+  # Secret-leak scanning (gitleaks) — human-error safety net.
+  # Pinned to v8.23.3: gitleaks v8.24+ requires a license for organization
+  # domains (the committer email domain). This repo is public/open-source, so
+  # contributors must be able to run the hook without a license.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.23.3
+    hooks:
+      - id: gitleaks
+        args: [--verbose, --redact, --staged]
+
+  # Python lint + format (astral-sh/ruff-pre-commit, self-managed env).
+  # Scoped to the project lint boundary (`make lint`/`make check` = src/ + tests/);
+  # root entrypoints (main.py, scripts/*.py) are intentionally outside that
+  # boundary and outside the hook.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.22
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^(src|tests)/.*\.py$
+      - id: ruff-format
+        files: ^(src|tests)/.*\.py$
+
+  # YAML validation with the repo ruleset (.yamllint.yaml is authored
+  # warning-free, achieving strictness without a global --strict flag).
+  # Scoped to the CI yamllint set (R-CI-1.8: workflows + compose) so tracked
+  # business YAML (clients/, dbt) stays out of the hook's diff surface.
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.38.0
+    hooks:
+      - id: yamllint
+        args: [-c, .yamllint.yaml]
+        files: ^(\.github/.*\.ya?ml|services/.*/compose\.ya?ml)$
+
+  # Shell validation via python-bundled shellcheck (no system binary required),
+  # scoped to the repo's tracked shell scripts.
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1
+    hooks:
+      - id: shellcheck
+        args: [--severity=warning]
+        files: ^(scripts|services/db/init)/.*\.sh$
+
+ci:
+  autoupdate_schedule: weekly
