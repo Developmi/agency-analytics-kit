@@ -73,6 +73,8 @@ LABEL org.opencontainers.image.source="$SOURCE" \
       org.opencontainers.image.description="Multi-tenant marketing data pipeline: extract, transform, and visualize ads + organic social metrics" \
       org.opencontainers.image.vendor="Developmi"
 
-USER app
+# Numeric UID (DL3066): non-numeric USER may not resolve in all runtimes; the
+# app user is created with --uid 1000 above, so 1000 is the exact same identity.
+USER 1000
 
 CMD ["tail", "-f", "/dev/null"]
