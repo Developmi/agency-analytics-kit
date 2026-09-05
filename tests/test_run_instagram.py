@@ -779,7 +779,10 @@ def test_media_media_url_nullable_fields(monkeypatch):
 
 def test_business_profile_daily_guard_skips_same_day(monkeypatch):
     """RED: Business profile daily guard skips 2nd same-day call."""
-    today = NOW.date().isoformat()
+    # Match the guard's clock (run_instagram uses datetime.now(timezone.utc)),
+    # not the frozen NOW fixture — otherwise this test breaks on any real date
+    # other than NOW's date (flaky across TZ/day boundaries).
+    today = datetime.now(timezone.utc).date().isoformat()
 
     class FakeDltCurrent:
         _state = {"last_run": today}
