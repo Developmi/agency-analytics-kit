@@ -80,11 +80,11 @@ pipeline:       ## Run pipeline orchestration
 
 # === DOCKER - BUILD ========================================================
 
-docker-build:           ## Build all images
-	docker build -t agency-pipeline:latest .
+docker-build:           ## Build all images (OCI labels: REVISION=local + CREATED now)
+	docker build --build-arg REVISION=local --build-arg CREATED=$$(date -u +%Y-%m-%dT%H:%M:%SZ) -t agency-pipeline:latest .
 
 docker-build-nocache:   ## Cold build (no layer cache)
-	docker build --no-cache -t agency-pipeline:latest .
+	docker build --no-cache --build-arg REVISION=local --build-arg CREATED=$$(date -u +%Y-%m-%dT%H:%M:%SZ) -t agency-pipeline:latest .
 
 # === DOCKER - STACKS =======================================================
 
