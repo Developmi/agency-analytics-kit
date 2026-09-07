@@ -21,18 +21,28 @@ connectors:
     enabled: false
     page_id: ""
     token_env: FACEBOOK_ACCESS_TOKEN_ACME
+    insights_days_back: 729
   instagram:
     enabled: false
     instagram_business_id: ""
     token_env: INSTAGRAM_ACCESS_TOKEN_ACME
+    insights_days_back: 729
   tiktok_organic:
     enabled: false
     open_id: ""
-    token_env: TIKTOK_ORGANIC_ACCESS_TOKEN_ACME
+    client_key_env: TIKTOK_ORGANIC_CLIENT_KEY_ACME
+    client_secret_env: TIKTOK_ORGANIC_CLIENT_SECRET_ACME
+    refresh_token_env: TIKTOK_ORGANIC_REFRESH_TOKEN_ACME
   youtube:
     enabled: false
     channel_id: ""
     token_env: YOUTUBE_API_KEY_ACME
+    oauth_client_id_env: YOUTUBE_OAUTH_CLIENT_ID_ACME
+    oauth_client_secret_env: YOUTUBE_OAUTH_CLIENT_SECRET_ACME
+    oauth_refresh_token_env: YOUTUBE_OAUTH_REFRESH_TOKEN_ACME
+    captions_enabled: false
+    region_code: "CO"
+    analytics_start_date: "2016-08-08"
   pinterest:
     enabled: false
     board_id: ""
@@ -40,7 +50,7 @@ connectors:
   ga4:
     enabled: false
     property_id: ""
-    token_env: GA4_ACCESS_TOKEN_ACME
+    service_account: ""
   gtm:
     enabled: false
     account_path: ""
