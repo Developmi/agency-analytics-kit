@@ -93,7 +93,7 @@ docker-up:      ## Start Postgres + Pipeline
 	sleep 3
 	$(MAKE) docker-pipeline
 
-docker-up-all:  ## Start Postgres + Pipeline + Metabase
+docker-up-all:  ## Start Postgres + Pipeline + Metabase (opt-in profile)
 	$(MAKE) docker-db
 	sleep 3
 	$(MAKE) docker-pipeline
@@ -102,12 +102,12 @@ docker-up-all:  ## Start Postgres + Pipeline + Metabase
 docker-down:    ## Stop all services
 	-docker compose -f services/db/compose.yaml down 2>/dev/null
 	-docker compose -f services/pipeline/compose.yaml down 2>/dev/null
-	-docker compose -f services/db/compose.yaml -f services/metabase/compose.yaml down 2>/dev/null
+	-docker compose --profile metabase -f services/db/compose.yaml -f services/metabase/compose.yaml down 2>/dev/null
 
 docker-logs:    ## Tail logs from all services
 	@docker compose -f services/db/compose.yaml logs -f &
 	@docker compose -f services/pipeline/compose.yaml logs -f &
-	@docker compose -f services/db/compose.yaml -f services/metabase/compose.yaml logs -f metabase &
+	@docker compose --profile metabase -f services/db/compose.yaml -f services/metabase/compose.yaml logs -f metabase &
 	@wait
 
 # === DOCKER - SERVICES =====================================================
@@ -118,8 +118,8 @@ docker-db:      ## Start Postgres 16
 docker-pipeline: ## Start pipeline worker
 	docker compose -f services/pipeline/compose.yaml up -d
 
-docker-metabase: ## Start Metabase
-	docker compose -f services/db/compose.yaml -f services/metabase/compose.yaml up -d metabase
+docker-metabase: ## Start Metabase (opt-in profile)
+	docker compose --profile metabase -f services/db/compose.yaml -f services/metabase/compose.yaml up -d metabase
 
 # === BOOTSTRAP ==============================================================
 

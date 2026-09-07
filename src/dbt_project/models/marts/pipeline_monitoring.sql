@@ -1,4 +1,4 @@
-{{ config(materialized='table', tags=['marts', var('client_id')]) }}
+{{ config(materialized='table', schema='public', tags=['marts', var('client_id')]) }}
 
 with runs as (
     select * from {{ ref('stg_public__pipeline_runs') }}

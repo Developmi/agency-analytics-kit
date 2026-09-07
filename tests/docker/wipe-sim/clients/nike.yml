@@ -1,0 +1,26 @@
+# Wipe-sim fixture (WU10, spec G-S2) — NO es el clients/nike.yml del repo.
+# Copia ACTIVE del contrato E-R1 con overlap meta/tiktok/google (A-S1). El
+# repo tracked clients/nike.yml permanece intacto (active: false); este
+# fixture solo vive en el entorno aislado wipesim_mt.
+client_id: nike
+client_name: "Nike Inc"
+schema: client_nike
+active: true
+
+connectors:
+  meta:
+    enabled: true
+    account_id: "0987654321"
+    token_env: META_ACCESS_TOKEN_NIKE
+  tiktok:
+    enabled: true
+    account_id: "TIK123456"
+    token_env: TIKTOK_ACCESS_TOKEN_NIKE
+  google:
+    enabled: true
+    customer_id: "123-456-7890"
+    token_env: GOOGLE_ADS_TOKEN_NIKE
+
+dbt:
+  tags:
+    - nike

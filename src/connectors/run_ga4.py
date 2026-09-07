@@ -5,8 +5,9 @@ import os
 import time
 
 import dlt
-import yaml
 from dlt.sources.helpers import requests
+
+from agency_analytics import client_config
 
 GA4_API_BASE = "https://analyticsdata.googleapis.com/v1beta"
 
@@ -223,25 +224,23 @@ if __name__ == "__main__":
     parser.add_argument("--client", required=True, help="Client ID from clients/ YAML")
     args = parser.parse_args()
 
-    clients_dir = os.environ.get("CLIENTS_DIR")
-    if not clients_dir:
-        clients_dir = "/app/clients"
-        if not os.path.exists(clients_dir):
-            clients_dir = os.path.normpath(
-                os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "clients")
-            )
-    client_file = f"{clients_dir}/{args.client}.yml"
+    client_file = client_config.client_file_path(args.client)
 
     if not os.path.exists(client_file):
         print(f"[GA4] Client file not found: {client_file}")
         exit(1)
 
-    with open(client_file) as f:
-        client = yaml.safe_load(f)
+    client = client_config.load_client(args.client)
 
     if not client.get("active", True):
         print(f"[GA4] Client {args.client} is not active. Skipping.")
         exit(0)
+
+    errors = client_config.validate_client(client)
+    if errors:
+        for error in errors:
+            print(f"[GA4] {error}")
+        exit(1)
 
     connector = client["connectors"].get("ga4", {})
     if not connector.get("enabled"):
@@ -250,7 +249,11 @@ if __name__ == "__main__":
 
     property_id = connector["property_id"]
     service_account_raw = connector["service_account"]
-    sa_json = _resolve_service_account(service_account_raw)
+    try:
+        sa_json = _resolve_service_account(service_account_raw)
+    except Exception as exc:
+        print(str(exc))
+        exit(1)
 
     client_email = sa_json["client_email"]
     private_key = sa_json["private_key"]
@@ -260,7 +263,7 @@ if __name__ == "__main__":
     pipeline = dlt.pipeline(
         pipeline_name=f"ga4_{args.client}",
         destination="postgres",
-        dataset_name="raw_ga4",
+        dataset_name=client_config.raw_dataset(args.client, "ga4"),
     )
     info = pipeline.run(ga4_source(property_id, client_email, private_key))
     print(f"[GA4] Done: {info}")

@@ -1,4 +1,4 @@
-{{ config(materialized='view', tags=['intermediate', var('client_id')]) }}
+{{ config(materialized='view', schema='staging', tags=['intermediate', var('client_id')]) }}
 
 with runs as (
     select * from {{ ref('stg_public__pipeline_runs') }}

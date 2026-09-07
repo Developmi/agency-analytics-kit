@@ -1,7 +1,10 @@
+import os
+import runpy
 from datetime import date
 from unittest.mock import MagicMock, patch
 
 import pytest
+import yaml
 from run_youtube import (
     _analytics_query,
     _api_get,
@@ -13,6 +16,9 @@ from run_youtube import (
     get_videos,
     youtube_source,
 )
+
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_RUN_YOUTUBE_PATH = os.path.join(_REPO_ROOT, "src", "connectors", "run_youtube.py")
 
 
 class TestParseIsoDuration:
@@ -516,3 +522,42 @@ class TestHandleResponse:
         mock_resp.headers = {"Retry-After": "5"}
         result = _handle_response(mock_resp, "test")
         assert result is None
+
+
+class TestMainBootstrap:
+    """Main-driven regression (SDD-C WU2, M-S2b): youtube leniency preserved.
+    Approval-style test — passes before and after the WU2 hunks; its failure
+    mode is the env guard being wrongly added to run_youtube (missing_envs
+    would turn the graceful API-key skip into exit 1).
+    """
+
+    def test_api_key_unset_no_trio_exits_0_lenient(self, tmp_path, monkeypatch, capsys):
+        client_dir = tmp_path / "clients"
+        client_dir.mkdir()
+        (client_dir / "yt_client.yml").write_text(
+            yaml.safe_dump(
+                {
+                    "client_id": "yt_client",
+                    "active": True,
+                    "connectors": {
+                        "youtube": {
+                            "enabled": True,
+                            "channel_id": "UC_test_channel",
+                            "token_env": "YOUTUBE_API_KEY_UNSET_TEST",
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("CLIENTS_DIR", str(client_dir))
+        monkeypatch.delenv("YOUTUBE_API_KEY_UNSET_TEST", raising=False)
+
+        with patch("sys.argv", ["run_youtube.py", "--client", "yt_client"]):
+            with pytest.raises(SystemExit) as exc:
+                runpy.run_path(_RUN_YOUTUBE_PATH, run_name="__main__")
+        assert exc.value.code == 0
+        out = capsys.readouterr().out
+        assert "[YOUTUBE]" in out
+        assert "Environment variable YOUTUBE_API_KEY_UNSET_TEST is not set." in out
+        assert "Skipping YouTube" in out

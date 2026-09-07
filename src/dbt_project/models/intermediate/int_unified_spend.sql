@@ -11,7 +11,7 @@ with meta_ads as (
         impressions::bigint              as impressions,
         clicks::bigint                   as clicks,
         report_date::date                as report_date,
-        '{{ var("client_schema") }}'::varchar as client_schema
+        '{{ var('client_id') }}'::varchar as client_id
     from {{ ref('stg_meta__ads') }}
 ),
 
@@ -26,7 +26,7 @@ tiktok_ads as (
         impressions::bigint              as impressions,
         clicks::bigint                   as clicks,
         report_date::date                as report_date,
-        '{{ var("client_schema") }}'::varchar as client_schema
+        '{{ var('client_id') }}'::varchar as client_id
     from {{ ref('stg_tiktok__ads') }}
 ),
 
@@ -41,7 +41,7 @@ google_ads as (
         stg_ads.impressions::bigint      as impressions,
         stg_ads.clicks::bigint           as clicks,
         stg_ads.report_date::date        as report_date,
-        '{{ var("client_schema") }}'::varchar as client_schema
+        '{{ var('client_id') }}'::varchar as client_id
     from {{ ref('stg_google__ads') }} stg_ads
     left join {{ ref('stg_google__campaigns') }} stg_campaigns
         on stg_ads.campaign_id = stg_campaigns.campaign_id

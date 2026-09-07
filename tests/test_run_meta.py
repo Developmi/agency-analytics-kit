@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+import yaml
 
 META_INSIGHTS = {
     "spend": "150.75",
@@ -155,3 +156,31 @@ class TestMetaAds:
         results = list(get_campaigns("123", "fake_token"))
         assert results[0]["budget"] == 500000.00
         assert results[0]["budget_type"] == "LIFETIME"
+
+
+class TestMainFailFast:
+    """Main-driven fail-fast (SDD-C WU2): run_meta bootstrap on a broken
+    active client. Today (pre-hunks) meta's ``.get`` guards make the missing
+    root skip with exit 0; the C-S3 normalization must turn it into a clear
+    prefixed message + exit 1.
+    """
+
+    def test_active_client_without_connectors_root_exits_1(self, tmp_path, monkeypatch, capsys):
+        client_dir = tmp_path / "clients"
+        client_dir.mkdir()
+        # C-S3 main-level: active client WITHOUT a ``connectors`` root key.
+        (client_dir / "broken_client.yml").write_text(
+            yaml.safe_dump({"client_id": "broken_client", "active": True}),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("CLIENTS_DIR", str(client_dir))
+
+        from run_meta import main
+
+        with patch("sys.argv", ["run_meta.py", "--client", "broken_client"]):
+            with pytest.raises(SystemExit) as exc:
+                main()
+        assert exc.value.code == 1
+        out = capsys.readouterr().out
+        assert "[META]" in out
+        assert '"connectors" root is missing or not a mapping' in out

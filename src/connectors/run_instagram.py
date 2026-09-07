@@ -7,8 +7,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import dlt
-import yaml
 from dlt.sources.helpers import requests
+
+from agency_analytics import client_config
 
 INSTAGRAM_API_BASE = "https://graph.facebook.com/v25.0"
 
@@ -594,30 +595,36 @@ if __name__ == "__main__":
     parser.add_argument("--client", required=True, help="Client ID from clients/ YAML")
     args = parser.parse_args()
 
-    clients_dir = os.environ.get("CLIENTS_DIR")
-    if not clients_dir:
-        clients_dir = "/app/clients"
-        if not os.path.exists(clients_dir):
-            clients_dir = os.path.normpath(
-                os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "clients")
-            )
-    client_file = f"{clients_dir}/{args.client}.yml"
+    client_file = client_config.client_file_path(args.client)
 
     if not os.path.exists(client_file):
         print(f"[INSTAGRAM] Client file not found: {client_file}")
         exit(1)
 
-    with open(client_file) as f:
-        client = yaml.safe_load(f)
+    client = client_config.load_client(args.client)
 
     if not client.get("active", True):
         print(f"[INSTAGRAM] Client {args.client} is not active. Skipping.")
         exit(0)
 
+    errors = client_config.validate_client(client)
+    if errors:
+        for error in errors:
+            print(f"[INSTAGRAM] {error}")
+        exit(1)
+
     connector = client["connectors"].get("instagram", {})
     if not connector.get("enabled"):
         print(f"[INSTAGRAM] Instagram connector not enabled for client {args.client}. Skipping.")
         exit(0)
+
+    missing = client_config.missing_envs("instagram", connector)
+    if missing:
+        for env_name in missing:
+            print(
+                f"[INSTAGRAM] Environment variable {env_name} is not set for client {args.client}."
+            )
+        exit(1)
 
     instagram_business_id = connector["instagram_business_id"]
     token_env = connector["token_env"]
@@ -631,7 +638,7 @@ if __name__ == "__main__":
     pipeline = dlt.pipeline(
         pipeline_name=f"instagram_{args.client}",
         destination="postgres",
-        dataset_name="raw_instagram",
+        dataset_name=client_config.raw_dataset(args.client, "instagram"),
     )
     insights_days_back = connector.get("insights_days_back", 729)
 

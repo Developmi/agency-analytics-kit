@@ -250,6 +250,9 @@ models:
       - name: report_date
         tests:
           - not_null
+      - name: client_id
+        tests:
+          - not_null
 
   # ===== OBSERVABILITY =====
 
@@ -321,6 +324,9 @@ models:
       - name: report_date
         tests:
           - not_null
+      - name: client_id
+        tests:
+          - not_null
 
   - name: ad_spend_summary
     columns:
@@ -331,5 +337,8 @@ models:
               arguments:
                 values: ["Meta", "TikTok", "Google"]
       - name: report_date
+        tests:
+          - not_null
+      - name: client_id
         tests:
           - not_null

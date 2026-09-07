@@ -1,6 +1,12 @@
 services:
   metabase:
-    image: metabase/metabase:latest
+    # Multi-tenancy-real (spec F-R1, design D9): Metabase is OPT-IN via compose
+    # profile. Without `--profile metabase` the service does not exist (F-S1);
+    # the profile activates it (F-S2). Image PINNED by digest (CVE-2026-27464
+    # affects < 0.57.13 and 0.58.0-0.58.6): tag v0.57.13 resolved to its
+    # multi-arch OCI index digest on 2026-09-06 (amd64/arm64).
+    image: metabase/metabase:v0.57.13@sha256:de1ba782c47ab45a471cb5ced9de566e77582150c14f48f7edd6db3473325d39
+    profiles: ["metabase"]
     container_name: agency_metabase
     env_file:
       - path: .env

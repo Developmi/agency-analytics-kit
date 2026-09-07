@@ -8,8 +8,9 @@ from datetime import date, timedelta
 from typing import Any
 
 import dlt
-import yaml
 from dlt.sources.helpers import requests
+
+from agency_analytics import client_config
 
 YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3"
 YOUTUBE_ANALYTICS_BASE = "https://youtubeanalytics.googleapis.com/v2/reports"
@@ -760,25 +761,23 @@ if __name__ == "__main__":
     parser.add_argument("--client", required=True, help="Client ID from clients/ YAML")
     args = parser.parse_args()
 
-    clients_dir = os.environ.get("CLIENTS_DIR")
-    if not clients_dir:
-        clients_dir = "/app/clients"
-        if not os.path.exists(clients_dir):
-            clients_dir = os.path.normpath(
-                os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "clients")
-            )
-    client_file = f"{clients_dir}/{args.client}.yml"
+    client_file = client_config.client_file_path(args.client)
 
     if not os.path.exists(client_file):
         print(f"[YOUTUBE] Client file not found: {client_file}")
         exit(1)
 
-    with open(client_file) as f:
-        client = yaml.safe_load(f)
+    client = client_config.load_client(args.client)
 
     if not client.get("active", True):
         print(f"[YOUTUBE] Client {args.client} is not active. Skipping.")
         exit(0)
+
+    errors = client_config.validate_client(client)
+    if errors:
+        for error in errors:
+            print(f"[YOUTUBE] {error}")
+        exit(1)
 
     connector = client["connectors"].get("youtube", {})
     if not connector.get("enabled"):
@@ -820,7 +819,7 @@ if __name__ == "__main__":
     pipeline = dlt.pipeline(
         pipeline_name=f"youtube_{args.client}",
         destination="postgres",
-        dataset_name="raw_youtube",
+        dataset_name=client_config.raw_dataset(args.client, "youtube"),
     )
     info = pipeline.run(
         youtube_source(

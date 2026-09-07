@@ -30,7 +30,6 @@ connectors:
   tiktok_organic:
     enabled: false
     open_id: ""
-    token_env: TIKTOK_ORGANIC_ACCESS_TOKEN_NEW_CLIENT
     client_key_env: TIKTOK_ORGANIC_CLIENT_KEY_NEW_CLIENT
     client_secret_env: TIKTOK_ORGANIC_CLIENT_SECRET_NEW_CLIENT
     refresh_token_env: TIKTOK_ORGANIC_REFRESH_TOKEN_NEW_CLIENT
@@ -38,6 +37,12 @@ connectors:
     enabled: false
     channel_id: ""
     token_env: YOUTUBE_API_KEY_NEW_CLIENT
+    oauth_client_id_env: YOUTUBE_OAUTH_CLIENT_ID_NEW_CLIENT
+    oauth_client_secret_env: YOUTUBE_OAUTH_CLIENT_SECRET_NEW_CLIENT
+    oauth_refresh_token_env: YOUTUBE_OAUTH_REFRESH_TOKEN_NEW_CLIENT
+    captions_enabled: false
+    region_code: "CO"
+    analytics_start_date: "2016-08-08"
   pinterest:
     enabled: false
     board_id: ""
@@ -45,7 +50,10 @@ connectors:
   ga4:
     enabled: false
     property_id: ""
-    token_env: GA4_ACCESS_TOKEN_NEW_CLIENT
+    # GA4 auth (JWT): service account JSON as base64 string or path to a .json
+    # key file. Required when this connector is enabled. Example:
+    #   service_account: /app/secrets/ga4-new_client.json
+    service_account: ""
   gtm:
     enabled: false
     account_path: ""

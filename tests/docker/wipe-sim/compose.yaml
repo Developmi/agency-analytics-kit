@@ -1,0 +1,79 @@
+# Wipe-sim aislado — multi-tenancy-real (WU10, spec G-S2 / design D10)
+# ---------------------------------------------------------------------------
+# Stack 100% AISLADO del entorno real del usuario: proyecto `wipesim_mt`, red
+# `wipesim_mt_net`, volumen `wipesim_mt_pgdata`, servicios postgres+pipeline
+# con nombres de container del proyecto. NUNCA usa los compose del repo
+# (services/db|pipeline), ni la red externa agency_internal_net, ni el
+# volumen db_pgdata, ni credenciales reales (valores de sim inline).
+#
+# - postgres:16-alpine con los init REALES del repo bind-mounteados (ro):
+#   01-create-pipeline-tables.sql + 02-bootstrap-rbac.sh v2 (env-gate
+#   METABASE_READER_ENABLED OFF por defecto; la rama ON se re-ejecuta a mano
+#   en el escenario D-S1 vía `docker compose exec -e ...`).
+# - pipeline: imagen construida DESDE CERO (compose build --no-cache) desde
+#   el Dockerfile raíz; monta el src REAL del repo (sujeto de prueba) en
+#   /app/src (ro — el repo nunca se escribe; dbt escribe en /tmp del
+#   container), los clients fixture del wipe-sim en /app/clients (acme/nike
+#   ACTIVE + overlap meta/tiktok/google; zeta sin conectores para G-S1) y el
+#   seed sintético en /app/wipesim. Credenciales dbt/dlt inline de sim.
+#
+# Ningún servicio publica puertos al host: todo el tráfico es intra-red del
+# proyecto (dbt/dlt/psql alcanzan postgres por el alias `postgres`).
+
+name: wipesim_mt
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: agency_admin
+      POSTGRES_PASSWORD: wipesim_mt_secret
+      POSTGRES_DB: agency_dw
+      # METABASE_READER_ENABLED deliberadamente AUSENTE -> OFF default (D-S1).
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../../../services/db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U agency_admin -d agency_dw"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+    networks:
+      - wipe_sim
+
+  pipeline:
+    build:
+      context: ../../..
+      dockerfile: Dockerfile
+    image: agency-pipeline-wipesim-mt:latest
+    environment:
+      CLIENTS_DIR: /app/clients
+      PYTHONPATH: /app/src
+      HOME: /home/app
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: agency_admin
+      POSTGRES_PASSWORD: wipesim_mt_secret
+      POSTGRES_DB: agency_dw
+      DESTINATION__POSTGRES__CREDENTIALS__HOST: postgres
+      DESTINATION__POSTGRES__CREDENTIALS__PORT: "5432"
+      DESTINATION__POSTGRES__CREDENTIALS__USERNAME: agency_admin
+      DESTINATION__POSTGRES__CREDENTIALS__PASSWORD: wipesim_mt_secret
+      DESTINATION__POSTGRES__CREDENTIALS__DATABASE: agency_dw
+    volumes:
+      - ../../../src:/app/src:ro
+      - ./clients:/app/clients:ro
+      - ./scripts:/app/wipesim:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - wipe_sim
+
+volumes:
+  pgdata:
+    name: wipesim_mt_pgdata
+
+networks:
+  wipe_sim:
+    name: wipesim_mt_net

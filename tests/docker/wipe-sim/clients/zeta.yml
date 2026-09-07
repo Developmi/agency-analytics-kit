@@ -1,0 +1,25 @@
+# Wipe-sim fixture (WU10, spec G-S1) — cliente activo SIN conectores
+# habilitados: el bootstrap/run no debe crear ningún schema raw_*_zeta y nada
+# debe fallar. Solo vive en el entorno aislado wipesim_mt.
+client_id: zeta
+client_name: "Zeta Test"
+schema: client_zeta
+active: true
+
+connectors:
+  meta:
+    enabled: false
+    account_id: ""
+    token_env: META_ACCESS_TOKEN_ZETA
+  tiktok:
+    enabled: false
+    account_id: ""
+    token_env: TIKTOK_ACCESS_TOKEN_ZETA
+  google:
+    enabled: false
+    customer_id: ""
+    token_env: GOOGLE_ADS_TOKEN_ZETA
+
+dbt:
+  tags:
+    - zeta

@@ -1,4 +1,4 @@
-{{ config(materialized='view') }}
+{{ config(materialized='view', schema='staging') }}
 
 with source as (
     select * from {{ source('public', 'pipeline_runs') }}

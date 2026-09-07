@@ -290,9 +290,6 @@ Conector: <code>${conn_name}</code>"
   # plan devuelve solo la cadena de monitoreo y dbt igualmente se ejecuta.
   step_id=$(pipeline_start_step "$run_id" "dbt_run")
 
-  # Leer schema del cliente desde YAML
-  client_schema_val=$(yaml_get "$client_file" '.schema')
-
   # Una sola llamada al plan por cliente (A4): modelos = conectores
   # habilitados + MONITORING_CHAIN con sus padres stg_public__; el flag de
   # inversión (meta+tiktok+google) decide los marts de inversión.
@@ -310,7 +307,7 @@ Conector: <code>${conn_name}</code>"
   fi
 
   log "dbt: seleccionados: ${dbt_select}"
-  dbt_vars='{"client_id": "'"${client_id}"'", "client_schema": "'"${client_schema_val}"'"}'
+  dbt_vars='{"client_id": "'"${client_id}"'"}'
   if docker exec -w /app/src/dbt_project agency_pipeline \
        dbt run --select "${dbt_select}" \
                --vars "${dbt_vars}" \

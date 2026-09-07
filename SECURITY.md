@@ -38,7 +38,7 @@ This project follows coordinated disclosure. We ask that you give us reasonable 
 
 1. **Never commit `.env` files** - the `.gitignore` blocks them; use `.env.example` as a template
 2. **Postgres** is bound to `127.0.0.1` only - no public database access
-3. **Metabase** uses a read-only database user (`metabase_reader`)
+3. **Metabase** is opt-in (`--profile metabase`) and connects with a dedicated read-only role (`metabase_reader`) that only exists when `METABASE_READER_ENABLED=true` (OFF by default; see ARCHITECTURE.md → Postgres Users and Access)
 4. **Pipeline tokens** live in environment variables, never in code
-5. **Docker networks** isolate services - Metabase cannot route traffic to the pipeline container
+5. **Docker networks** scope container traffic; Metabase attaches to the internal net to reach Postgres, so its security boundary is the restricted read-only DB role, not network isolation (see ARCHITECTURE.md → Honest Network Posture)
 6. **Telegram alerts** use a bot token with minimal permissions
