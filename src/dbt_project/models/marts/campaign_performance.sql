@@ -1,6 +1,7 @@
 {{ config(tags=['marts', var('client_id')]) }}
 
 select
+    client_id,
     source_platform                  as platform,
     campaign_id,
     campaign_name,
@@ -21,5 +22,4 @@ select
         2
     )                                as cpm
 from {{ ref('int_unified_spend') }}
-where client_schema = '{{ var("client_schema") }}'
-group by source_platform, campaign_id, campaign_name, report_date
+group by client_id, source_platform, campaign_id, campaign_name, report_date
