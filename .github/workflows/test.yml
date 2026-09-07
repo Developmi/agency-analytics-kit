@@ -50,10 +50,15 @@ jobs:
             echo "::error::unexpected .env in checkout"
             exit 1
           fi
-          validate() { # $@ = compose files
+          validate() { # [--profile NAME] $@ = compose files
             files=()
+            profile=()
+            if [ "${1:-}" = "--profile" ]; then
+              profile=(--profile "$2")
+              shift 2
+            fi
             for f in "$@"; do files+=(-f "$f"); done
-            if ! out="$(docker compose --env-file /dev/null "${files[@]}" config 2>&1)"; then
+            if ! out="$(docker compose --env-file /dev/null "${profile[@]}" "${files[@]}" config 2>&1)"; then
               echo "::error::compose config failed"
               printf '%s\n' "$out"
               exit 1
@@ -66,4 +71,17 @@ jobs:
           }
           validate services/db/compose.yaml
           validate services/pipeline/compose.yaml
+          # Metabase is profile opt-in (multi-tenancy-real, spec F-R1/F-R3):
+          # validate db+metabase in BOTH states, without interpolation warning.
+          # F-S1: OFF default - config valid, metabase service ABSENT.
           validate services/db/compose.yaml services/metabase/compose.yaml
+          if docker compose --env-file /dev/null -f services/db/compose.yaml -f services/metabase/compose.yaml config --services | grep -qx metabase; then
+            echo "::error::metabase must be profile-gated (absent without --profile metabase)"
+            exit 1
+          fi
+          # F-S2: ON with profile - config valid, metabase service PRESENT.
+          validate --profile metabase services/db/compose.yaml services/metabase/compose.yaml
+          if ! docker compose --env-file /dev/null --profile metabase -f services/db/compose.yaml -f services/metabase/compose.yaml config --services | grep -qx metabase; then
+            echo "::error::metabase must be present with --profile metabase"
+            exit 1
+          fi
