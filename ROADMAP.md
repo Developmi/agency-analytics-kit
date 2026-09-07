@@ -46,7 +46,7 @@
 - [x] `campaign_performance` mart (CTR, CPC, CPM per campaign)
 - [x] `ad_spend_summary` mart (daily spend per platform)
 - [x] `generate_schema_name` multi-tenant macro
-- [x] `get_client_sources` macro (runtime YAML reading)
+- [x] `sources.yml` jinja source routing (`raw_<connector>_<client_id>`, M1; the v1 `get_client_sources` runtime-YAML macro was removed as superseded)
 - [x] `sources.yml` - 10 raw sources declared
 - [x] `schema.yml` - 75 test definitions across 27 models
 - [x] Client tags on intermediate and marts models

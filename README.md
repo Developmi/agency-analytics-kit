@@ -63,11 +63,11 @@ mindmap
 
 - **10 data connectors**: Meta Ads, TikTok Ads, Google Ads, Facebook Pages, Instagram Business, TikTok Organic, YouTube Data, Pinterest, GA4, GTM
 - **Honest status tracking**: See [Connector status](#-connector-status) for which integrations are tested live vs. code-complete only
-- **Multi-tenant by design**: Per-client schemas, YAML-based client config, dbt macros for isolation
+- **Multi-tenant by design**: per-client raw namespaces and dbt output schemas (`raw_<connector>_<client_id>` / `client_<client_id>`), YAML client config, shared observability
 - **No-code connector config**: Add/remove platforms per client via YAML, no code changes
 - **Pipeline orchestration**: Health checks, per-client loops, Telegram alerts
-- **dbt transformations**: 24 staging models → intermediate → marts
-- **Quality gate**: 186 tests, ruff linting, mypy type checking
+- **dbt transformations**: 30 staging models → intermediate → marts (35 models total)
+- **Quality gate**: 228 tests, ruff linting, mypy type checking
 - **Docker native**: Isolated services, two Docker networks, no vendor lock-in
 
 ---
@@ -134,29 +134,35 @@ cp .env.example .env
 
 ```bash
 make setup-networks   # Create Docker networks
-make docker-all        # Start Postgres, pipeline, Metabase
+make docker-up-all     # Start Postgres, Pipeline, and Metabase (opt-in profile)
 ```
 
 ### 3. Run the pipeline
 
 ```bash
 make setup-env        # Ensure .env exists
-make test             # 186 tests should pass
+make test             # 228 tests should pass
 ./scripts/pipeline.sh  # Full E2E pipeline (or use cron)
 ```
 
-### 4. Access Metabase
+### 4. Access Metabase (opt-in)
 
-Open `http://localhost:3000` and connect the `metabase_reader` Postgres user.
+Metabase is **not** part of the default stack: it is gated behind the `metabase`
+compose profile (enabled by `make docker-up-all` / `make docker-metabase`).
+Before first start, set `METABASE_READER_ENABLED=true` in
+`services/db/.env` and make `METABASE_READER_PASSWORD` match `MB_DB_PASS` in
+`services/metabase/.env`; the init bootstrap then creates the `metabase_reader`
+role. Open `http://localhost:3000` and connect the `metabase_reader` Postgres
+user.
 
 ---
 
 ## Architecture
 
-- **Ingestion**: Each platform has a standalone dlt script with exponential backoff, rate-limit handling, and token-expiry detection
-- **Storage**: PostgreSQL 16 - raw data per schema (`raw_meta`, `raw_facebook`, etc.), transformed in staging/intermediate/marts
-- **Transformation**: dbt with multi-tenant macros - `generate_schema_name` routes to `client_<id>` schemas
-- **Visualization**: Metabase connected as `metabase_reader` (read-only Postgres user)
+- **Ingestion**: Each platform has a standalone dlt script with exponential backoff, rate-limit handling, and token-expiry detection; every run targets a per-client raw dataset (`raw_<connector>_<client_id>`, full replace per tenant)
+- **Storage**: PostgreSQL 16 - per-client raw namespaces (`raw_meta_acme`, `raw_google_nike`, ...) plus shared observability (`public`, `staging`), transformed per client into `client_<id>` schemas
+- **Transformation**: dbt with multi-tenant routing - `generate_schema_name` sends tenant models to `client_<id>` and sources.yml jinja resolves each client's own raw namespace
+- **Visualization**: Metabase (opt-in compose profile) connected as `metabase_reader`, a read-only Postgres role that only exists when `METABASE_READER_ENABLED=true`
 - **Orchestration**: `./scripts/pipeline.sh` runs nightly via cron, validates Docker health, loops over active clients, sends Telegram summary
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for full design.
@@ -174,7 +180,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for full design.
 │
 ├── src/                            # Application source
 │   ├── connectors/                 #   10 dlt connector scripts
-│   ├── dbt_project/                #   27 dbt models + macros
+│   ├── dbt_project/                #   35 dbt models + macros
 │   └── agency_analytics/           #   CLI module
 │
 ├── clients/                        # Multi-tenant YAML config
@@ -186,7 +192,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for full design.
 │   ├── pipeline.sh
 │   └── setup-networks.sh
 │
-├── tests/                          # 186 mock-based tests
+├── tests/                          # 228 mock/unit-based tests
 ├── .env.example
 ├── pyproject.toml
 └── .gitignore
@@ -219,7 +225,11 @@ Each service runs in its own Compose stack with separate `.env` files:
 - `services/pipeline/.env` - API tokens, dlt/dbt config
 - `services/metabase/.env` - Metabase credentials
 
-Docker networks (`agency_analytics_net`, `agency_internal_net`) isolate traffic: Metabase cannot reach the pipeline container.
+Docker networks (`agency_analytics_net`, `agency_internal_net`) isolate traffic.
+Metabase attaches to both networks to reach Postgres, so it shares a bridge with
+the pipeline container — its guard is a dedicated read-only DB role
+(`metabase_reader`, opt-in), not network isolation (see
+[ARCHITECTURE.md](ARCHITECTURE.md) → Honest Network Posture).
 
 ### Use a published image (`vX` tags)
 
@@ -267,7 +277,7 @@ See [.env.example](.env.example) for the full list of environment variables.
 ## Tests
 
 ```bash
-make test               # Run all tests (186 tests across 10 connectors)
+make test               # Run all tests (228 tests)
 make lint               # ruff check
 make typecheck          # mypy
 make quality            # Full gate: lint + typecheck + test
