@@ -1,0 +1,26 @@
+# Wipe-sim fixture (WU10, spec G-S2) — NO es el clients/acme.yml del repo.
+# Copia ACTIVE del contrato E-R1 con overlap meta/tiktok/google (A-S1). El
+# repo tracked clients/acme.yml permanece intacto (active: false); este
+# fixture solo vive en el entorno aislado wipesim_mt.
+client_id: acme
+client_name: "Acme Corp"
+schema: client_acme
+active: true
+
+connectors:
+  meta:
+    enabled: true
+    account_id: "1234567890"
+    token_env: META_ACCESS_TOKEN_ACME
+  tiktok:
+    enabled: true
+    account_id: "TIK987654"
+    token_env: TIKTOK_ACCESS_TOKEN_ACME
+  google:
+    enabled: true
+    customer_id: "987-654-3210"
+    token_env: GOOGLE_ADS_TOKEN_ACME
+
+dbt:
+  tags:
+    - acme

@@ -1,6 +1,9 @@
+import os
+import runpy
 from unittest.mock import MagicMock, patch
 
 import pytest
+import yaml
 from run_ga4 import (
     _parse_rows,
     _resolve_service_account,
@@ -10,6 +13,9 @@ from run_ga4 import (
     get_event_analytics,
     get_page_analytics,
 )
+
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_RUN_GA4_PATH = os.path.join(_REPO_ROOT, "src", "connectors", "run_ga4.py")
 
 SAMPLE_DAILY_RESPONSE = {
     "dimensionHeaders": [{"name": "date"}],
@@ -264,3 +270,36 @@ class TestRunReportErrorHandling:
 
         with pytest.raises(Exception, match="Token expired"):
             _run_report("prop/123", "bad-token", {})
+
+
+class TestMainFailFast:
+    """Main-driven fail-fast (SDD-C WU2, M-S1). run_ga4 has no ``main()`` —
+    its bootstrap lives in the ``if __name__ == "__main__"`` block, so the test
+    executes the real module as ``__main__`` via runpy. The broken client is
+    active with ga4 enabled but missing ``service_account`` (C-S1 cross-case at
+    main level): today this is a raw KeyError traceback (M-R3 violation).
+    """
+
+    def test_active_client_missing_service_account_exits_1(self, tmp_path, monkeypatch, capsys):
+        client_dir = tmp_path / "clients"
+        client_dir.mkdir()
+        (client_dir / "broken_ga4.yml").write_text(
+            yaml.safe_dump(
+                {
+                    "client_id": "broken_ga4",
+                    "active": True,
+                    "connectors": {"ga4": {"enabled": True, "property_id": "properties/123456789"}},
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("CLIENTS_DIR", str(client_dir))
+
+        with patch("sys.argv", ["run_ga4.py", "--client", "broken_ga4"]):
+            with pytest.raises(SystemExit) as exc:
+                runpy.run_path(_RUN_GA4_PATH, run_name="__main__")
+        assert exc.value.code == 1
+        out = capsys.readouterr().out
+        assert "[GA4]" in out
+        assert 'missing required key "service_account"' in out
+        assert "Traceback" not in out

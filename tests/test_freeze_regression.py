@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any, Sequence
 
+from agency_analytics.client_config import raw_dataset
 from agency_analytics.freeze_regression import (
     CONNECTOR_CHECKS,
     INSTAGRAM_TOTAL_VALUE_ONLY,
@@ -24,6 +25,7 @@ from agency_analytics.freeze_regression import (
     check_rows,
     check_table_via_db,
     frozen_columns,
+    resolve_check_schema,
     rows_from_csv,
 )
 
@@ -223,11 +225,12 @@ def test_detector_is_parametrizable_for_other_connectors() -> None:
 
     Hypothetical facebook daily shape used only to prove the parametrization
     mechanism (IG6-R1). Real FB/YT wiring happens when those daily tables come
-    into scope; inventing their constants here would be drift.
+    into scope; inventing their constants here would be drift. The schema is
+    the helper default-scope (raw_dataset(None, ...)) — E-R3 single-sourcing.
     """
     facebook_like = TableCheck(
         connector="facebook",
-        schema="raw_facebook",
+        schema=raw_dataset(None, "facebook"),
         table="page_insights_daily",
         key_cols=("date",),
         vary_cols=("organic_reach", "total_reach"),
@@ -240,19 +243,49 @@ def test_detector_is_parametrizable_for_other_connectors() -> None:
     ]
     report = check_rows(rows, facebook_like)
     assert report.connector == "facebook"
-    assert report.schema == "raw_facebook"
+    assert report.schema == raw_dataset(None, "facebook")
     assert report.table == "page_insights_daily"
-    assert report.as_dict()["table"] == "raw_facebook.page_insights_daily"
+    assert report.as_dict()["table"] == f"{raw_dataset(None, 'facebook')}.page_insights_daily"
     assert report.frozen == (FrozenMetric(column="total_reach", value=55, key_count=3),)
     assert report.guard_offenders == ()
     assert report.ok is False
+
+
+def test_check_schema_resolution_is_client_aware_via_helper() -> None:
+    """E-R3/D8: a check's target schema resolves through the naming helper.
+
+    Default scope (no client) -> legacy ``raw_<connector>``; a tenant run ->
+    ``raw_<connector>_<client_id>``. No tenant-unaware hardcoded schema.
+    """
+    assert resolve_check_schema(IG_CHECK) == raw_dataset(None, "instagram")
+    assert resolve_check_schema(IG_CHECK) == "raw_instagram"
+    assert resolve_check_schema(IG_CHECK, "acme") == "raw_instagram_acme"
+    assert resolve_check_schema(IG_CHECK, "nike") == "raw_instagram_nike"
+
+    facebook_like = TableCheck(
+        connector="facebook",
+        schema=raw_dataset(None, "facebook"),
+        table="page_insights_daily",
+        key_cols=("date",),
+        vary_cols=("organic_reach",),
+        tv_only_cols=(),
+    )
+    assert resolve_check_schema(facebook_like, "acme") == "raw_facebook_acme"
+    assert resolve_check_schema(facebook_like) == "raw_facebook"
+
+
+def test_instagram_wiring_schema_matches_helper_default_scope() -> None:
+    """The wired IG check must be the helper default-scope, not a literal."""
+    assert IG_CHECK.schema == raw_dataset(None, "instagram")
+    assert IG_CHECK.connector == "instagram"
+    assert IG_CHECK.schema == CONNECTOR_CHECKS["instagram"].schema
 
 
 def test_composite_window_key_identity_is_supported() -> None:
     """Multi-column keys (video_id + date) work: distinct key tuples are counted."""
     window_like = TableCheck(
         connector="youtube",
-        schema="raw_youtube",
+        schema=raw_dataset(None, "youtube"),
         table="video_daily_analytics",
         key_cols=("video_id", "date"),
         vary_cols=("views",),
@@ -292,3 +325,9 @@ def test_db_backed_check_skips_without_dsn() -> None:
     assert isinstance(result, Skipped)
     assert "DSN" in result.reason
     assert "docker" in result.reason
+
+    # Client-aware path: without a DSN the gate must skip identically before
+    # deriving the schema or touching the driver (E-R3 default-scope guard).
+    client_result = check_table_via_db(None, IG_CHECK, client_id="acme")
+    assert isinstance(client_result, Skipped)
+    assert "DSN" in client_result.reason
