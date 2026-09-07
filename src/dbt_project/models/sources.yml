@@ -1,30 +1,35 @@
 version: 2
 
 sources:
+  # M1 source routing (design D1, spec B-R2): the raw_* connector schemas below
+  # are jinja-rendered per invocation — schema becomes raw_<connector>_<client_id>
+  # for the running client (tenant silo: stg_* reads its own raw namespace).
+  # The `public` observability source at the bottom stays static: monitoring is
+  # shared and client-partitioned by row (client_id), never per-client schema.
   - name: raw_meta
     database: agency_dw
-    schema: raw_meta
+    schema: "raw_meta_{{ var('client_id') }}"
     tables:
       - name: ads
       - name: campaigns
 
   - name: raw_tiktok
     database: agency_dw
-    schema: raw_tiktok
+    schema: "raw_tiktok_{{ var('client_id') }}"
     tables:
       - name: ads
       - name: campaigns
 
   - name: raw_google
     database: agency_dw
-    schema: raw_google
+    schema: "raw_google_{{ var('client_id') }}"
     tables:
       - name: ads
       - name: campaigns
 
   - name: raw_facebook
     database: agency_dw
-    schema: raw_facebook
+    schema: "raw_facebook_{{ var('client_id') }}"
     tables:
       - name: page_posts
       - name: feed
@@ -33,7 +38,7 @@ sources:
 
   - name: raw_instagram
     database: agency_dw
-    schema: raw_instagram
+    schema: "raw_instagram_{{ var('client_id') }}"
     tables:
       - name: media
       - name: insights_daily
@@ -42,14 +47,14 @@ sources:
 
   - name: raw_tiktok_organic
     database: agency_dw
-    schema: raw_tiktok_organic
+    schema: "raw_tiktok_organic_{{ var('client_id') }}"
     tables:
       - name: profile_stats
       - name: videos_organic
 
   - name: raw_youtube
     database: agency_dw
-    schema: raw_youtube
+    schema: "raw_youtube_{{ var('client_id') }}"
     tables:
       - name: channel_stats
       - name: uploaded_videos
@@ -68,7 +73,7 @@ sources:
 
   - name: raw_pinterest
     database: agency_dw
-    schema: raw_pinterest
+    schema: "raw_pinterest_{{ var('client_id') }}"
     tables:
       - name: boards
       - name: pins
@@ -76,7 +81,7 @@ sources:
 
   - name: raw_ga4
     database: agency_dw
-    schema: raw_ga4
+    schema: "raw_ga4_{{ var('client_id') }}"
     tables:
       - name: daily_stats
       - name: page_analytics
@@ -84,7 +89,7 @@ sources:
 
   - name: raw_gtm
     database: agency_dw
-    schema: raw_gtm
+    schema: "raw_gtm_{{ var('client_id') }}"
     tables:
       - name: containers
       - name: tags

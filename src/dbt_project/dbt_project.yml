@@ -8,17 +8,24 @@ target-path: target   # D4/B4: explícito y regenerable (gitignored, bind-mounte
 log-path: logs        # dbt-core no lee DBT_TARGET_PATH/DBT_LOG_PATH (eran no-ops)
 
 vars:
+  # B-R3/D2: only client_id is declared. A missing --vars client_id resolves to
+  # 'default' -> client_default in generate_schema_name (fail-fast, never a
+  # shared schema). The legacy dual-semantics var is gone end-to-end (D3/D7):
+  # int/marts stamp client_id from var('client_id') and pipeline.sh forwards
+  # only client_id via --vars.
   client_id: "default"
-  client_schema: "public"
 
 models:
   agency_dbt:
+    # D2/B-R3: no folder-level +schema for tenant models (staging/intermediate/
+    # marts route via generate_schema_name -> client_<id>). The observability
+    # chain keeps its shared schemas through explicit config(schema=...) in the
+    # 4 model files (stg_public__*, int_pipeline_daily_summary -> staging;
+    # pipeline_monitoring -> public).
     staging:
-      +schema: staging
       +materialized: view
       +tags: [staging]
     intermediate:
-      +schema: staging
       +materialized: view
       +tags: [intermediate]
     marts:
