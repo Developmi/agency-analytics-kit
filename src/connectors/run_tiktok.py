@@ -3,8 +3,9 @@ import os
 import time
 
 import dlt
-import yaml
 from dlt.sources.helpers import requests
+
+from agency_analytics import client_config
 
 TIKTOK_API_BASE = "https://business-api.tiktok.com/open_api/v1.3"
 MAX_RETRIES = 5
@@ -164,30 +165,34 @@ def main():
     parser.add_argument("--client", required=True, help="Client ID from clients/ YAML")
     args = parser.parse_args()
 
-    clients_dir = os.environ.get("CLIENTS_DIR")
-    if not clients_dir:
-        clients_dir = "/app/clients"
-        if not os.path.exists(clients_dir):
-            clients_dir = os.path.normpath(
-                os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "clients")
-            )
-    client_file = f"{clients_dir}/{args.client}.yml"
+    client_file = client_config.client_file_path(args.client)
 
     if not os.path.exists(client_file):
         print(f"[TIKTOK] Client file not found: {client_file}")
         exit(1)
 
-    with open(client_file) as f:
-        client = yaml.safe_load(f)
+    client = client_config.load_client(args.client)
 
     if not client.get("active", True):
         print(f"[TIKTOK] Client {args.client} is not active. Skipping.")
         exit(0)
 
+    errors = client_config.validate_client(client)
+    if errors:
+        for error in errors:
+            print(f"[TIKTOK] {error}")
+        exit(1)
+
     connector = client.get("connectors", {}).get("tiktok", {})
     if not connector.get("enabled"):
         print(f"[TIKTOK] TikTok Ads connector not enabled for client {args.client}. Skipping.")
         exit(0)
+
+    missing = client_config.missing_envs("tiktok", connector)
+    if missing:
+        for env_name in missing:
+            print(f"[TIKTOK] Environment variable {env_name} is not set for client {args.client}.")
+        exit(1)
 
     account_id = connector["account_id"]
     token_env = connector["token_env"]
@@ -198,7 +203,7 @@ def main():
     pipeline = dlt.pipeline(
         pipeline_name=f"tiktok_{args.client}",
         destination="postgres",
-        dataset_name="raw_tiktok",
+        dataset_name=client_config.raw_dataset(args.client, "tiktok"),
     )
     info = pipeline.run(tiktok_ads_source(account_id, access_token))
     print(f"[TIKTOK] Done: {info}")

@@ -5,8 +5,9 @@ import os
 import time
 
 import dlt
-import yaml
 from dlt.sources.helpers import requests
+
+from agency_analytics import client_config
 
 PINTEREST_API_BASE = "https://api.pinterest.com/v5"
 
@@ -187,30 +188,36 @@ if __name__ == "__main__":
     parser.add_argument("--client", required=True, help="Client ID from clients/ YAML")
     args = parser.parse_args()
 
-    clients_dir = os.environ.get("CLIENTS_DIR")
-    if not clients_dir:
-        clients_dir = "/app/clients"
-        if not os.path.exists(clients_dir):
-            clients_dir = os.path.normpath(
-                os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "clients")
-            )
-    client_file = f"{clients_dir}/{args.client}.yml"
+    client_file = client_config.client_file_path(args.client)
 
     if not os.path.exists(client_file):
         print(f"[PINTEREST] Client file not found: {client_file}")
         exit(1)
 
-    with open(client_file) as f:
-        client = yaml.safe_load(f)
+    client = client_config.load_client(args.client)
 
     if not client.get("active", True):
         print(f"[PINTEREST] Client {args.client} is not active. Skipping.")
         exit(0)
 
+    errors = client_config.validate_client(client)
+    if errors:
+        for error in errors:
+            print(f"[PINTEREST] {error}")
+        exit(1)
+
     connector = client["connectors"].get("pinterest", {})
     if not connector.get("enabled"):
         print(f"[PINTEREST] Pinterest connector not enabled for client {args.client}. Skipping.")
         exit(0)
+
+    missing = client_config.missing_envs("pinterest", connector)
+    if missing:
+        for env_name in missing:
+            print(
+                f"[PINTEREST] Environment variable {env_name} is not set for client {args.client}."
+            )
+        exit(1)
 
     board_id = connector.get("board_id") or None
     token_env = connector["token_env"]
@@ -221,7 +228,7 @@ if __name__ == "__main__":
     pipeline = dlt.pipeline(
         pipeline_name=f"pinterest_{args.client}",
         destination="postgres",
-        dataset_name="raw_pinterest",
+        dataset_name=client_config.raw_dataset(args.client, "pinterest"),
     )
     info = pipeline.run(pinterest_source(access_token, board_id))
     print(f"[PINTEREST] Done: {info}")

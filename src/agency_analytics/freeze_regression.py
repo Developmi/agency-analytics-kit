@@ -17,6 +17,13 @@ in-memory rows (or CSV), parametrized per connector through
 reuse the same primitives when their daily tables come into scope — nothing
 here hardcodes an Instagram column name in the logic.
 
+Schema scope (multi-tenancy, spec E-R3 / design D8): every :class:`TableCheck`
+is wired to the naming helper's default scope — ``raw_dataset(None,
+connector)``, the legacy shared ``raw_<connector>`` — and never to a hardcoded
+tenant-unaware literal. The DB-backed gate resolves the target schema per
+client through the same helper (``raw_<connector>_<client_id>`` when a
+``client_id`` is given) via :func:`resolve_check_schema`.
+
 Freeze semantics mirror SQL ``count(DISTINCT)`` over non-NULL values:
 
 * a must-vary column is FROZEN when exactly one distinct non-NULL value exists
@@ -45,9 +52,11 @@ one guard offender was found.
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping, Sequence
+
+from agency_analytics.client_config import raw_dataset
 
 # total_value-only metric names per connector: never valid as a daily column.
 # The Instagram list is transcribed from the official Meta metric table (docs
@@ -96,17 +105,29 @@ class TableCheck:
 
 # Per-connector wiring. ``instagram`` is enforced now; a future FB/YT entry is
 # just another TableCheck over the foreign daily table (parametrization proven
-# in tests/test_freeze_regression.py with foreign shapes).
+# in tests/test_freeze_regression.py with foreign shapes). The schema is the
+# naming helper's DEFAULT SCOPE (raw_dataset(None, connector) -> legacy shared
+# ``raw_<connector>``) — E-R3: no tenant-unaware hardcoded raw schema.
 CONNECTOR_CHECKS: dict[str, TableCheck] = {
     "instagram": TableCheck(
         connector="instagram",
-        schema="raw_instagram",
+        schema=raw_dataset(None, "instagram"),
         table="insights_daily",
         key_cols=("report_date",),
         vary_cols=INSTAGRAM_DAILY_VARY_COLS,
         tv_only_cols=INSTAGRAM_TOTAL_VALUE_ONLY,
     ),
 }
+
+
+def resolve_check_schema(check: TableCheck, client_id: str | None = None) -> str:
+    """Raw schema a check targets: helper-derived, client-aware (E-R3/D8).
+
+    With a ``client_id`` the check scopes to that tenant's dataset
+    (``raw_<connector>_<client_id>``); with ``None`` it stays on the default
+    scope — the legacy shared ``raw_<connector>`` the check was wired for.
+    """
+    return raw_dataset(client_id, check.connector)
 
 
 @dataclass(frozen=True)
@@ -280,12 +301,17 @@ def rows_from_csv(path: str | Path) -> Iterator[dict[str, str]]:
 def check_table_via_db(
     dsn: str | None,
     check: TableCheck,
+    client_id: str | None = None,
 ) -> TableReport | Skipped:
     """DB-backed thin wrapper: schema columns + key/vary rows -> pure checks.
 
     Executed only when ``dsn`` is provided (the isolated docker gate, apply
     WU5). With ``dsn=None`` it returns :class:`Skipped` without importing the
     driver, keeping offline/unit imports pure (design D9: no DSN => skip).
+
+    The schema is resolved per client through the naming helper (design D8,
+    E-R3): a ``client_id`` scopes the check to ``raw_<connector>_<client_id>``;
+    ``None`` keeps the default-scope legacy ``raw_<connector>``.
     """
     if dsn is None:
         return Skipped(
@@ -297,23 +323,25 @@ def check_table_via_db(
     import psycopg2  # deferred: only reachable with an explicit DSN
     from psycopg2 import sql
 
+    schema = resolve_check_schema(check, client_id)
+    target = replace(check, schema=schema)
     conn = psycopg2.connect(dsn)
     try:
         with conn.cursor() as cursor:
             cursor.execute(
                 "SELECT column_name FROM information_schema.columns "
                 "WHERE table_schema = %s AND table_name = %s",
-                (check.schema, check.table),
+                (schema, target.table),
             )
             schema_columns = [row[0] for row in cursor.fetchall()]
-            selected = [*check.key_cols, *check.vary_cols]
+            selected = [*target.key_cols, *target.vary_cols]
             query = sql.SQL("SELECT {} FROM {}.{}").format(
                 sql.SQL(", ").join(map(sql.Identifier, selected)),
-                sql.Identifier(check.schema),
-                sql.Identifier(check.table),
+                sql.Identifier(schema),
+                sql.Identifier(target.table),
             )
             cursor.execute(query)
             rows = [dict(zip(selected, row_tuple)) for row_tuple in cursor.fetchall()]
     finally:
         conn.close()
-    return check_rows(rows, check, columns=schema_columns)
+    return check_rows(rows, target, columns=schema_columns)

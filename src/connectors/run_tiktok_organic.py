@@ -3,8 +3,9 @@ import os
 import time
 
 import dlt
-import yaml
 from dlt.sources.helpers import requests
+
+from agency_analytics import client_config
 
 TIKTOK_API_BASE = "https://open.tiktokapis.com"
 
@@ -195,25 +196,23 @@ def main():
     parser.add_argument("--client", required=True, help="Client ID from clients/ YAML")
     args = parser.parse_args()
 
-    clients_dir = os.environ.get("CLIENTS_DIR")
-    if not clients_dir:
-        clients_dir = "/app/clients"
-        if not os.path.exists(clients_dir):
-            clients_dir = os.path.normpath(
-                os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "clients")
-            )
-    client_file = f"{clients_dir}/{args.client}.yml"
+    client_file = client_config.client_file_path(args.client)
 
     if not os.path.exists(client_file):
         print(f"[TIKTOK_ORGANIC] Client file not found: {client_file}")
         exit(1)
 
-    with open(client_file) as f:
-        client = yaml.safe_load(f)
+    client = client_config.load_client(args.client)
 
     if not client.get("active", True):
         print(f"[TIKTOK_ORGANIC] Client {args.client} is not active. Skipping.")
         exit(0)
+
+    errors = client_config.validate_client(client)
+    if errors:
+        for error in errors:
+            print(f"[TIKTOK_ORGANIC] {error}")
+        exit(1)
 
     connector = client["connectors"].get("tiktok_organic", {})
     if not connector.get("enabled"):
@@ -222,6 +221,15 @@ def main():
             f" not enabled for client {args.client}. Skipping."
         )
         exit(0)
+
+    missing = client_config.missing_envs("tiktok_organic", connector)
+    if missing:
+        for env_name in missing:
+            print(
+                f"[TIKTOK_ORGANIC] Environment variable {env_name} is not set"
+                f" for client {args.client}."
+            )
+        exit(1)
 
     open_id = connector["open_id"]
     client_key = os.environ[connector["client_key_env"]]
@@ -233,7 +241,7 @@ def main():
     pipeline = dlt.pipeline(
         pipeline_name=f"tiktok_organic_{args.client}",
         destination="postgres",
-        dataset_name="raw_tiktok_organic",
+        dataset_name=client_config.raw_dataset(args.client, "tiktok_organic"),
     )
     info = pipeline.run(tiktok_organic_source(open_id, client_key, client_secret, refresh_token))
     print(f"[TIKTOK_ORGANIC] Done: {info}")
