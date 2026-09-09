@@ -9,7 +9,7 @@ from typing import Any
 import dlt
 from dlt.sources.helpers import requests
 
-from agency_analytics import client_config
+from agency_analytics import archiver, client_config
 
 INSTAGRAM_API_BASE = "https://graph.facebook.com/v25.0"
 
@@ -408,7 +408,12 @@ def _fetch_breakdown(insights_url, access_token, window, axis, axis_metrics, con
 
 
 @dlt.resource(name="insights_daily", write_disposition="replace")
-def get_insights(instagram_business_id: str, access_token: str, insights_days_back: int = 729):
+def get_insights(
+    instagram_business_id: str,
+    access_token: str,
+    insights_days_back: int = 729,
+    capture: list[dict[str, Any]] | None = None,
+):
     """Per-day metrics only (IG1): reach over the full backfill window loop plus
     follower_count in the recent 30-day window where the API answers.
 
@@ -417,6 +422,11 @@ def get_insights(instagram_business_id: str, access_token: str, insights_days_ba
     scalar can fan out over dates (IG1-R2) and no total_value column exists
     (IG1-R3). ``reach`` merges per date from its own window — no cross-window
     overwrite fabricates data (Scenario 1.2).
+
+    SDD-D archive seam (D1/G4): when ``capture`` (a list, default None) is
+    passed, the follower series rows — only where the API answered
+    ``follower_count`` (the trailing 30 days; older dates are NULL) — are
+    appended pre-yield for the post-run archiver (CATCH-R3: no NULLs archived).
     """
     insights_url = f"{INSTAGRAM_API_BASE}/{instagram_business_id}/insights"
     context = f"instagram {instagram_business_id}"
@@ -443,11 +453,14 @@ def get_insights(instagram_business_id: str, access_token: str, insights_days_ba
     follower_by_date = _fetch_follower_count(insights_url, access_token, context)
 
     for date in sorted(set(reach_by_date) | set(follower_by_date)):
-        yield {
+        row = {
             "report_date": date,
             "reach": reach_by_date.get(date),
             "follower_count": follower_by_date.get(date),
         }
+        if capture is not None and row["follower_count"] is not None:
+            capture.append(row)
+        yield row
 
 
 @dlt.resource(
@@ -468,6 +481,7 @@ def get_insights_totals(
     instagram_business_id: str,
     access_token: str,
     horizon_days: int = TOTALS_HORIZON_DAYS,
+    capture: list[dict[str, Any]] | None = None,
 ):
     """Per-window total_value rows (IG2) + nested breakdowns child table.
 
@@ -480,6 +494,11 @@ def get_insights_totals(
 
     Nested ``breakdowns`` rows auto-normalize to the dlt child table
     ``insights_totals__breakdowns`` (design D3; existing child-table pattern).
+
+    SDD-D archive seam (D1): when ``capture`` (a list, default None) is passed,
+    each window row is appended pre-yield — window identity plus its nested
+    breakdown children — so the post-run archiver can persist the row before
+    the live replace evicts it (ARC-R2; zero extra API calls).
     """
     base_url = f"{INSTAGRAM_API_BASE}/{instagram_business_id}"
     insights_url = f"{base_url}/insights"
@@ -531,6 +550,8 @@ def get_insights_totals(
                 )
                 disabled_axes.add(axis)
         row["breakdowns"] = breakdown_rows
+        if capture is not None:
+            capture.append(row)
         yield row
 
 
@@ -572,18 +593,44 @@ def instagram_source(
     access_token: str,
     insights_days_back: int = 729,
     totals_horizon_days: int = TOTALS_HORIZON_DAYS,
+    capture: dict[str, list[dict[str, Any]]] | None = None,
 ):
     # IG7-R1 additive-first: insights_totals precedes insights_daily in the
     # source list so the additive table is created before the daily shrink.
+    # SDD-D (D1): ``capture`` fans out to the two capture-bearing resources
+    # (``totals`` rows with breakdowns; ``follower`` series), default None keeps
+    # the pre-archive behavior byte-identical.
+    totals_capture = capture["totals"] if capture is not None else None
+    follower_capture = capture["follower"] if capture is not None else None
     return [
         get_media(instagram_business_id, access_token),
-        get_insights_totals(instagram_business_id, access_token, totals_horizon_days),
-        get_insights(instagram_business_id, access_token, insights_days_back),
+        get_insights_totals(
+            instagram_business_id, access_token, totals_horizon_days, capture=totals_capture
+        ),
+        get_insights(
+            instagram_business_id, access_token, insights_days_back, capture=follower_capture
+        ),
         get_business_profile(instagram_business_id, access_token),
     ]
 
 
-if __name__ == "__main__":
+def _archive_table(client, dataset, table, columns, natural_keys, rows):
+    """One archive table from the pure archiver builders: idempotent DDL then a
+    guarded multi-row insert.
+
+    ``insert_on_conflict`` returns ``(None, ())`` for zero rows; the guard
+    skips the statement so no empty query ever reaches Postgres (ARC-S4/CATCH-R3
+    contract from WU1). Column names come from the per-table spec helpers, so
+    DDL order == INSERT order == flattener key order (no literal duplication).
+    """
+    client.execute_sql(archiver.create_table_ddl(dataset, table, columns, natural_keys))
+    column_names = [name for name, _ in columns]
+    sql, params = archiver.insert_on_conflict(dataset, table, column_names, rows, natural_keys)
+    if sql is not None:
+        client.execute_sql(sql, *params)
+
+
+def main():
     from dotenv import load_dotenv
 
     try:
@@ -642,5 +689,58 @@ if __name__ == "__main__":
     )
     insights_days_back = connector.get("insights_days_back", 729)
 
-    info = pipeline.run(instagram_source(instagram_business_id, access_token, insights_days_back))
+    # SDD-D (D1): capture this run's own rows in memory while dlt extracts —
+    # zero extra API calls (ARC-R2/NFR-2). The post-run archiver then persists
+    # them before the live replace evicts history (totals >90d, follower >30d).
+    capture: dict[str, list[dict[str, Any]]] = {"totals": [], "follower": []}
+    info = pipeline.run(
+        instagram_source(
+            instagram_business_id,
+            access_token,
+            insights_days_back,
+            capture=capture,
+        )
+    )
     print(f"[INSTAGRAM] Done: {info}")
+
+    # ─── SDD-D post-run archive glue (D6): append-only _history tables ─────
+    # Fail-loud (ARC-S5): any archive error prints the marker and exits 1 so
+    # the existing dlt_instagram audit step reports failed. Success keeps the
+    # exit code 0. Metric columns are injected from the connector constants
+    # (single source of truth, design open question Q1 resolved).
+    captured_at = datetime.now(timezone.utc)
+    dataset = client_config.raw_dataset(args.client, "instagram")
+    metric_columns = (*TOTAL_VALUE_COMMON_METRICS, *TOTAL_VALUE_GATED_METRICS)
+    try:
+        with pipeline.sql_client() as client:
+            _archive_table(
+                client,
+                dataset,
+                archiver.INSIGHTS_TOTALS_HISTORY,
+                archiver.insights_totals_columns(metric_columns),
+                archiver.TOTALS_NATURAL_KEYS,
+                archiver.flatten_totals(capture["totals"], metric_columns, captured_at),
+            )
+            _archive_table(
+                client,
+                dataset,
+                archiver.INSIGHTS_TOTALS_BREAKDOWNS_HISTORY,
+                archiver.insights_totals_breakdowns_columns(),
+                archiver.BREAKDOWNS_NATURAL_KEYS,
+                archiver.flatten_breakdowns(capture["totals"], captured_at),
+            )
+            _archive_table(
+                client,
+                dataset,
+                archiver.FOLLOWER_COUNT_HISTORY,
+                archiver.follower_count_columns(),
+                archiver.FOLLOWER_NATURAL_KEYS,
+                archiver.flatten_follower(capture["follower"], captured_at),
+            )
+    except Exception as exc:
+        print(f"[INSTAGRAM] Archive failed: {exc}")
+        exit(1)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,11 +1,13 @@
 import argparse
 import os
 import time
+from datetime import datetime, timezone
+from typing import Any
 
 import dlt
 from dlt.sources.helpers import requests
 
-from agency_analytics import client_config
+from agency_analytics import archiver, client_config
 
 TIKTOK_API_BASE = "https://open.tiktokapis.com"
 
@@ -99,7 +101,11 @@ def _do_request(
 
 
 @dlt.resource(name="profile_stats", write_disposition="replace")
-def get_profile_stats(open_id: str, access_token: str):
+def get_profile_stats(
+    open_id: str,
+    access_token: str,
+    capture: list[dict[str, Any]] | None = None,
+):
     url = f"{TIKTOK_API_BASE}/v2/user/info/"
     params = {
         "fields": "follower_count,following_count,likes_count,video_count",
@@ -110,13 +116,18 @@ def get_profile_stats(open_id: str, access_token: str):
     )
 
     user = data.get("data", {}).get("user", {})
-    yield {
+    row = {
         "report_date": time.strftime("%Y-%m-%d"),
         "follower_count": int(user.get("follower_count", 0) or 0),
         "following_count": int(user.get("following_count", 0) or 0),
         "likes_count": int(user.get("likes_count", 0) or 0),
         "video_count": int(user.get("video_count", 0) or 0),
     }
+    # SDD-D archive seam (D1): append the row pre-yield so the post-run
+    # archiver can persist it before the live replace drops it (ARC-R2).
+    if capture is not None:
+        capture.append(row)
+    yield row
 
 
 @dlt.resource(name="videos_organic", write_disposition="replace")
@@ -160,6 +171,7 @@ def tiktok_organic_source(
     client_key: str,
     client_secret: str,
     refresh_token: str,
+    capture: dict[str, list[dict[str, Any]]] | None = None,
 ):
     state = dlt.current.source_state()
     tokens = state.setdefault("tiktok_organic_tokens", {})
@@ -178,8 +190,11 @@ def tiktok_organic_source(
 
     access_token = tokens["access_token"]
 
+    # SDD-D (D1): ``capture`` fans out to get_profile_stats; default None keeps
+    # the pre-archive behavior byte-identical.
+    stats_capture = capture["profile_stats"] if capture is not None else None
     return [
-        get_profile_stats(open_id, access_token),
+        get_profile_stats(open_id, access_token, capture=stats_capture),
         get_videos_organic(open_id, access_token),
     ]
 
@@ -243,8 +258,43 @@ def main():
         destination="postgres",
         dataset_name=client_config.raw_dataset(args.client, "tiktok_organic"),
     )
-    info = pipeline.run(tiktok_organic_source(open_id, client_key, client_secret, refresh_token))
+    # SDD-D (D1): capture this run's profile_stats row in memory while dlt
+    # extracts — zero extra API calls (ARC-R2/NFR-2).
+    capture: dict[str, list[dict[str, Any]]] = {"profile_stats": []}
+    info = pipeline.run(
+        tiktok_organic_source(open_id, client_key, client_secret, refresh_token, capture=capture)
+    )
     print(f"[TIKTOK_ORGANIC] Done: {info}")
+
+    # ─── SDD-D post-run archive glue (D6): append-only _history table ───────
+    # Fail-loud (ARC-S5): any archive error prints the marker and exits 1 so
+    # the existing dlt_tiktok_organic audit step reports failed. Success keeps
+    # the exit code 0.
+    captured_at = datetime.now(timezone.utc)
+    dataset = client_config.raw_dataset(args.client, "tiktok_organic")
+    profile_rows = archiver.flatten_profile_stats(capture["profile_stats"], captured_at)
+    try:
+        with pipeline.sql_client() as client:
+            client.execute_sql(
+                archiver.create_table_ddl(
+                    dataset,
+                    archiver.PROFILE_STATS_HISTORY,
+                    archiver.profile_stats_columns(),
+                    archiver.PROFILE_NATURAL_KEYS,
+                )
+            )
+            sql, params = archiver.insert_on_conflict(
+                dataset,
+                archiver.PROFILE_STATS_HISTORY,
+                [name for name, _ in archiver.profile_stats_columns()],
+                profile_rows,
+                archiver.PROFILE_NATURAL_KEYS,
+            )
+            if sql is not None:
+                client.execute_sql(sql, *params)
+    except Exception as exc:
+        print(f"[TIKTOK] Archive failed: {exc}")
+        exit(1)
 
 
 if __name__ == "__main__":

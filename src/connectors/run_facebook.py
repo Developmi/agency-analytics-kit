@@ -435,7 +435,21 @@ def get_page_insights(page_id: str, access_token: str, insights_days_back: int =
         }
 
 
-@dlt.resource(name="page_profile", write_disposition="replace")
+@dlt.resource(
+    name="page_profile",
+    write_disposition="replace",
+    columns={
+        # dlt materializes only columns that receive data; all-NULL columns are
+        # dropped (obs #625 bug class) - hint nullable so replace always
+        # creates them (IG precedent run_instagram.py:466-479).
+        "picture_url": {"data_type": "text", "nullable": True},
+        "about": {"data_type": "text", "nullable": True},
+        "website": {"data_type": "text", "nullable": True},
+        "category": {"data_type": "text", "nullable": True},
+        "cover": {"data_type": "text", "nullable": True},
+        "rating_count": {"data_type": "bigint", "nullable": True},
+    },
+)
 def get_page_profile(page_id: str, access_token: str):
     state = dlt.current.resource_state()
     today = datetime.now(timezone.utc).date().isoformat()

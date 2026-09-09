@@ -78,6 +78,15 @@ INVESTMENT_MARTS: tuple[str, ...] = (
     "campaign_performance",
 )
 
+# Connector name -> organic mart files built for that connector's tenant (spec
+# E SEL-R1, design D3). Mart names must match the files under models/marts/.
+# This whitelist is consumed by ``organic_marts()`` and stays OUT of
+# CONNECTOR_MODELS, which remains staging-only.
+CONNECTOR_ORGANIC_MARTS: dict[str, tuple[str, ...]] = {
+    "instagram": ("organic_instagram_totals", "organic_instagram_daily"),
+    "tiktok_organic": ("organic_tiktok_profile_daily",),
+}
+
 
 @dataclass(frozen=True)
 class Plan:
@@ -104,6 +113,24 @@ def build_plan(enabled: Iterable[str]) -> Plan:
         models.extend(CONNECTOR_MODELS[connector])
     models.extend(MONITORING_CHAIN)
     return Plan(models=tuple(models), investment=INVESTMENT_NEEDS <= seen)
+
+
+def organic_marts(enabled: Iterable[str]) -> tuple[str, ...]:
+    """Resolve the organic mart select for a client's enabled connectors.
+
+    Returns the mart files of every known organic connector (in ``enabled``
+    order, duplicates collapsed) — the same seen-dedupe shape ``build_plan``
+    uses. Connectors without an organic mapping contribute nothing, so clients
+    without organic connectors get an empty tuple (spec E SEL-R1).
+    """
+    seen: set[str] = set()
+    marts: list[str] = []
+    for connector in enabled:
+        if connector in seen or connector not in CONNECTOR_ORGANIC_MARTS:
+            continue
+        seen.add(connector)
+        marts.extend(CONNECTOR_ORGANIC_MARTS[connector])
+    return tuple(marts)
 
 
 def run_status(connectors_ok: int, connectors_failed: int, dbt_status: str) -> str:
@@ -147,7 +174,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "plan":
         enabled = [connector for connector in args.connectors.split(",") if connector]
         plan = build_plan(enabled)
-        print(json.dumps({"models": list(plan.models), "investment": plan.investment}))
+        print(
+            json.dumps(
+                {
+                    "models": list(plan.models),
+                    "investment": plan.investment,
+                    "organic_marts": list(organic_marts(enabled)),
+                }
+            )
+        )
     else:
         verdict = run_status(args.ok, args.failed, args.dbt_status)
         print(json.dumps({"status": verdict}))
