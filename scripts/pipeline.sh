@@ -6,6 +6,13 @@ LOG_FILE="/var/log/agency_pipeline.log"
 CLIENTS_DIR="./clients"
 TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
 TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:-}"
+
+# Telegram keys: host env wins; guarded key-targeted fallback to root ./.env
+# (no full source, no set -a, no export - no secret pollution of the process env).
+if { [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; } && [ -f ./.env ]; then
+  [ -z "$TELEGRAM_BOT_TOKEN" ] && TELEGRAM_BOT_TOKEN=$(sed -n 's/^TELEGRAM_BOT_TOKEN=//p' ./.env | head -n1 | tr -d '\r')
+  [ -z "$TELEGRAM_CHAT_ID" ] && TELEGRAM_CHAT_ID=$(sed -n 's/^TELEGRAM_CHAT_ID=//p' ./.env | head -n1 | tr -d '\r')
+fi
 PG_USER="${POSTGRES_USER:-agency_admin}"
 PG_DB="${POSTGRES_DB:-agency_dw}"
 PG_CONTAINER="agency_postgres"
@@ -71,6 +78,16 @@ plan_investment() {
 import json, sys
 plan = json.loads(sys.argv[1])
 print("true" if plan["investment"] else "false")
+' "$1"
+}
+
+plan_organic() {
+  # $1 = JSON del plan → imprime los marts orgánicos separados por espacio
+  # (resuelto por CONNECTOR_ORGANIC_MARTS en pipeline_plan.py, design D3).
+  # Campo ausente → vacío (no-op seguro, threat-matrix D3).
+  docker exec -w /app/src agency_pipeline python3 -c '
+import json, sys
+print(" ".join(json.loads(sys.argv[1]).get("organic_marts", [])))
 ' "$1"
 }
 
@@ -306,17 +323,25 @@ Conector: <code>${conn_name}</code>"
     log "dbt: modelos de inversión omitidos (faltan meta, tiktok o google)"
   fi
 
+  # Los marts orgánicos los resuelve el módulo (CONNECTOR_ORGANIC_MARTS +
+  # organic_marts() en pipeline_plan.py, design D3): sin lista duplicada aquí.
+  organic_marts_val=$(plan_organic "$plan_json")
+  if [ -n "$organic_marts_val" ]; then
+    dbt_select="${dbt_select} ${organic_marts_val}"
+    log "dbt: incluidos marts orgánicos (instagram/tiktok_organic)"
+  fi
+
   log "dbt: seleccionados: ${dbt_select}"
   dbt_vars='{"client_id": "'"${client_id}"'"}'
   if docker exec -w /app/src/dbt_project agency_pipeline \
-       dbt run --select "${dbt_select}" \
+       dbt build --select "${dbt_select}" \
                --vars "${dbt_vars}" \
                --profiles-dir .; then
     dbt_status="success"
     pipeline_finish_step "$step_id" "success"
   else
     dbt_status="failed"
-    pipeline_finish_step "$step_id" "failed" "dbt run falló"
+    pipeline_finish_step "$step_id" "failed" "dbt build falló"
     send_telegram "⚠️ <b>Fallo dbt</b>
 Cliente: <code>${client_id}</code>"
     log "ERROR: dbt falló para ${client_id}."
