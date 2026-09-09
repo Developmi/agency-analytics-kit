@@ -496,6 +496,78 @@ class TestYoutubeSource:
         names = [r.name for r in source.resources.values()]
         assert "captions" in names
 
+    # ── SDD-F WU4: dlt nullable column hints (YLD-R2/R3, design D5) ──────────
+    # dlt only materializes columns that receive data; optional/state-gated
+    # youtube fields (default_language, live-stream timestamps, etc.) would be
+    # dropped from the raw tables without explicit ``columns=`` hints (obs #625
+    # bug class, IG WU5 precedent run_instagram.py:466-479). Each test reads
+    # the declared hints statically from the built source (no iteration) and
+    # asserts name/data_type/nullable per resource.
+
+    @staticmethod
+    def _hints(resource) -> dict:
+        return {name: col for name, col in (resource.columns or {}).items()}
+
+    def _assert_hint(self, hints: dict, column: str, data_type: str) -> None:
+        assert column in hints, f"column {column} needs a dlt nullable hint"
+        assert hints[column]["data_type"] == data_type
+        assert hints[column]["nullable"] is True
+
+    @patch("run_youtube.requests.get")
+    def test_channel_stats_declares_default_language_hint(self, mock_get):
+        channel_resp = MagicMock()
+        channel_resp.json.return_value = {"items": []}
+        mock_get.return_value = channel_resp
+
+        source = youtube_source("UC_test", "key")
+        hints = self._hints(source.resources["channel_stats"])
+        self._assert_hint(hints, "default_language", "text")
+
+    @patch("run_youtube.requests.get")
+    def test_uploaded_videos_declares_video_published_at_hint(self, mock_get):
+        channel_resp = MagicMock()
+        channel_resp.json.return_value = {"items": []}
+        mock_get.return_value = channel_resp
+
+        source = youtube_source("UC_test", "key")
+        hints = self._hints(source.resources["uploaded_videos"])
+        self._assert_hint(hints, "video_published_at", "timestamp")
+
+    @patch("run_youtube.requests.get")
+    def test_videos_declares_kids_and_live_stream_hints(self, mock_get):
+        channel_resp = MagicMock()
+        channel_resp.json.return_value = {"items": []}
+        mock_get.return_value = channel_resp
+
+        source = youtube_source("UC_test", "key")
+        hints = self._hints(source.resources["videos"])
+        self._assert_hint(hints, "self_declared_made_for_kids", "bool")
+        self._assert_hint(hints, "live_broadcast_content", "text")
+        self._assert_hint(hints, "live_concurrent_viewers", "bigint")
+        self._assert_hint(hints, "live_scheduled_start_time", "timestamp")
+        self._assert_hint(hints, "live_actual_start_time", "timestamp")
+        self._assert_hint(hints, "live_actual_end_time", "timestamp")
+
+    @patch("run_youtube.requests.get")
+    def test_playlists_declares_updated_at_hint(self, mock_get):
+        channel_resp = MagicMock()
+        channel_resp.json.return_value = {"items": []}
+        mock_get.return_value = channel_resp
+
+        source = youtube_source("UC_test", "key")
+        hints = self._hints(source.resources["playlists"])
+        self._assert_hint(hints, "updated_at", "timestamp")
+
+    @patch("run_youtube.requests.get")
+    def test_playlist_items_declares_video_published_at_hint(self, mock_get):
+        channel_resp = MagicMock()
+        channel_resp.json.return_value = {"items": []}
+        mock_get.return_value = channel_resp
+
+        source = youtube_source("UC_test", "key")
+        hints = self._hints(source.resources["playlist_items"])
+        self._assert_hint(hints, "video_published_at", "timestamp")
+
 
 class TestHandleResponse:
     def test_handle_response_valid(self):

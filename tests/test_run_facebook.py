@@ -710,3 +710,31 @@ def test_connector_insights_days_back():
     fb_cfg = template["connectors"]["facebook"]
     assert "insights_days_back" in fb_cfg
     assert isinstance(fb_cfg["insights_days_back"], int)
+
+
+def test_page_profile_resource_declares_column_hints():
+    """YLD-S1 (SDD-F WU3): page_profile hints keep the raw schema stable.
+
+    dlt only materializes columns that receive data; all-NULL profile fields
+    (cover/about on an unconfigured page, etc.) would be dropped from the raw
+    table without explicit ``columns=`` hints (obs #625 bug class, IG WU5
+    precedent run_instagram.py:466-479). The hints declare the volatile fields
+    text/bigint-nullable so replace always creates them.
+    """
+    from run_facebook import facebook_page_source
+
+    source = facebook_page_source("test_page_123", "mock_token")
+    profile = source.resources["page_profile"]
+    hints = {name: col for name, col in (profile.columns or {}).items()}
+    expected = {
+        "picture_url": "text",
+        "about": "text",
+        "website": "text",
+        "category": "text",
+        "cover": "text",
+        "rating_count": "bigint",
+    }
+    for column, data_type in expected.items():
+        assert column in hints, f"column {column} needs a dlt nullable hint"
+        assert hints[column]["data_type"] == data_type
+        assert hints[column]["nullable"] is True

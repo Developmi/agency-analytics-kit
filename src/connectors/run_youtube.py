@@ -272,7 +272,18 @@ def _analytics_query(
     return rows
 
 
-@dlt.resource(name="channel_stats", write_disposition="replace")
+@dlt.resource(
+    name="channel_stats",
+    write_disposition="replace",
+    columns={
+        # Optional snippet fields can be absent on a real channel; dlt drops
+        # all-NULL columns without explicit hints (obs #625 bug class, IG WU5
+        # precedent run_instagram.py:466-479) - hint nullable so replace
+        # always creates them. Hints pin the raw contract on data-carrying
+        # loads only (YLD-S3: state-gated empty loads early-return).
+        "default_language": {"data_type": "text", "nullable": True},
+    },
+)
 def get_channel_stats(channel_id: str, api_key: str):
     url = f"{YOUTUBE_API_BASE}/channels"
     params: dict[str, Any] = {
@@ -313,7 +324,16 @@ def get_channel_stats(channel_id: str, api_key: str):
     }
 
 
-@dlt.resource(name="uploaded_videos", write_disposition="replace")
+@dlt.resource(
+    name="uploaded_videos",
+    write_disposition="replace",
+    columns={
+        # Consumer-less hint kept: pins the raw contract the extractor yields
+        # (YLD-S2/S3, design D4) - nullable so replace always creates the
+        # column on data-carrying loads.
+        "video_published_at": {"data_type": "timestamp", "nullable": True},
+    },
+)
 def get_uploaded_videos(channel_id: str, uploads_playlist_id: str, api_key: str):
     url = f"{YOUTUBE_API_BASE}/playlistItems"
     params: dict[str, Any] = {
@@ -344,7 +364,22 @@ def get_uploaded_videos(channel_id: str, uploads_playlist_id: str, api_key: str)
             break
 
 
-@dlt.resource(name="videos", write_disposition="replace")
+@dlt.resource(
+    name="videos",
+    write_disposition="replace",
+    columns={
+        # Live-stream + kids fields are absent for most videos; dlt drops
+        # all-NULL columns without explicit hints (obs #625 bug class, IG WU5
+        # precedent) - hint nullable so replace always creates them on
+        # data-carrying loads (YLD-S3: state-gated empty loads early-return).
+        "self_declared_made_for_kids": {"data_type": "bool", "nullable": True},
+        "live_broadcast_content": {"data_type": "text", "nullable": True},
+        "live_concurrent_viewers": {"data_type": "bigint", "nullable": True},
+        "live_scheduled_start_time": {"data_type": "timestamp", "nullable": True},
+        "live_actual_start_time": {"data_type": "timestamp", "nullable": True},
+        "live_actual_end_time": {"data_type": "timestamp", "nullable": True},
+    },
+)
 def get_videos(channel_id: str, uploads_playlist_id: str, api_key: str):
     video_ids = _enumerate_uploads(channel_id, uploads_playlist_id, api_key)
     if not video_ids:
@@ -393,7 +428,16 @@ def get_videos(channel_id: str, uploads_playlist_id: str, api_key: str):
             }
 
 
-@dlt.resource(name="playlists", write_disposition="replace")
+@dlt.resource(
+    name="playlists",
+    write_disposition="replace",
+    columns={
+        # Consumer-less hint kept: pins the raw contract the extractor yields
+        # (YLD-S2/S3, design D4) - nullable so replace always creates the
+        # column on data-carrying loads.
+        "updated_at": {"data_type": "timestamp", "nullable": True},
+    },
+)
 def get_playlists(channel_id: str, api_key: str):
     url = f"{YOUTUBE_API_BASE}/playlists"
     params: dict[str, Any] = {
@@ -423,7 +467,16 @@ def get_playlists(channel_id: str, api_key: str):
             break
 
 
-@dlt.resource(name="playlist_items", write_disposition="replace")
+@dlt.resource(
+    name="playlist_items",
+    write_disposition="replace",
+    columns={
+        # Consumer-less hint kept: pins the raw contract the extractor yields
+        # (YLD-S2/S3, design D4) - nullable so replace always creates the
+        # column on data-carrying loads.
+        "video_published_at": {"data_type": "timestamp", "nullable": True},
+    },
+)
 def get_playlist_items(channel_id: str, uploads_playlist_id: str, api_key: str):
     playlist_ids = [row["playlist_id"] for row in get_playlists(channel_id, api_key)]
     if not playlist_ids:

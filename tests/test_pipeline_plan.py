@@ -10,11 +10,13 @@ import pytest
 
 from agency_analytics.pipeline_plan import (
     CONNECTOR_MODELS,
+    CONNECTOR_ORGANIC_MARTS,
     INVESTMENT_MARTS,
     INVESTMENT_NEEDS,
     MONITORING_CHAIN,
     build_plan,
     main,
+    organic_marts,
     run_status,
 )
 
@@ -148,6 +150,72 @@ def test_build_plan_deterministic_and_deduplicates_connectors():
     )
 
 
+# ─── CONNECTOR_ORGANIC_MARTS + organic_marts (spec E SEL-R1 → SEL-S1..S3) ──
+
+
+def test_connector_organic_marts_constant_matches_design():
+    """The organic whitelist maps each organic connector to its mart names (D3).
+
+    Mart names must exactly match the files created in slice A1:
+    ``organic_instagram_totals``, ``organic_instagram_daily`` and
+    ``organic_tiktok_profile_daily``.
+    """
+    assert CONNECTOR_ORGANIC_MARTS == {
+        "instagram": ("organic_instagram_totals", "organic_instagram_daily"),
+        "tiktok_organic": ("organic_tiktok_profile_daily",),
+    }
+
+
+def test_organic_marts_never_leak_into_connector_models():
+    """No cross-leak: CONNECTOR_MODELS stays staging-only (SEL-R1/SEL-S3)."""
+    assert CONNECTOR_ORGANIC_MARTS.keys() <= CONNECTOR_MODELS.keys()
+    staging_models = {m for models in CONNECTOR_MODELS.values() for m in models}
+    assert all(model.startswith("stg_") for model in staging_models)
+    for models in CONNECTOR_ORGANIC_MARTS.values():
+        assert all(model.startswith("organic_") for model in models)
+        assert staging_models.isdisjoint(models)
+
+
+@pytest.mark.parametrize(
+    ("enabled", "expected"),
+    [
+        # SEL-S1: IG-only client → both IG marts, no TT mart
+        (["instagram"], ("organic_instagram_totals", "organic_instagram_daily")),
+        # SEL-S2: TT-only client → only the TT mart
+        (["tiktok_organic"], ("organic_tiktok_profile_daily",)),
+        # SEL-S3: both connectors → union of all three marts
+        (
+            ["instagram", "tiktok_organic"],
+            (
+                "organic_instagram_totals",
+                "organic_instagram_daily",
+                "organic_tiktok_profile_daily",
+            ),
+        ),
+        # No organic connector → empty selection
+        (["meta", "tiktok"], ()),
+        ([], ()),
+        # Non-organic connector next to an organic one is ignored
+        (["meta", "instagram"], ("organic_instagram_totals", "organic_instagram_daily")),
+    ],
+)
+def test_organic_marts_selection_table(enabled, expected):
+    """Resolver returns the organic marts for the enabled connectors (SEL-S1..S3)."""
+    assert organic_marts(enabled) == expected
+
+
+def test_organic_marts_deterministic_order_and_dedupe():
+    """Order-preserving with duplicate connectors collapsed (D3, like build_plan)."""
+    first = organic_marts(["instagram", "tiktok_organic", "instagram"])
+    second = organic_marts(["instagram", "tiktok_organic"])
+    assert first == second
+    assert first == (
+        "organic_instagram_totals",
+        "organic_instagram_daily",
+        "organic_tiktok_profile_daily",
+    )
+
+
 # ─── run_status (spec A3) ──────────────────────────────────────────────────
 
 
@@ -177,7 +245,30 @@ def test_main_plan_prints_single_json_line(monkeypatch, capsys):
     assert len(lines) == 1
     payload = json.loads(lines[0])
     plan = build_plan(["meta", "tiktok"])
-    assert payload == {"models": list(plan.models), "investment": plan.investment}
+    assert payload == {
+        "models": list(plan.models),
+        "investment": plan.investment,
+        "organic_marts": list(organic_marts(["meta", "tiktok"])),
+    }
+
+
+def test_main_plan_json_exposes_organic_marts(monkeypatch, capsys):
+    """The JSON contract consumed by pipeline.sh carries the organic key (D3)."""
+    monkeypatch.setattr(
+        "sys.argv",
+        ["pipeline_plan", "plan", "--connectors", "instagram,tiktok_organic"],
+    )
+    assert main() == 0
+    out = capsys.readouterr().out
+    lines = [line for line in out.splitlines() if line.strip()]
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+    assert set(payload) == {"models", "investment", "organic_marts"}
+    assert payload["organic_marts"] == [
+        "organic_instagram_totals",
+        "organic_instagram_daily",
+        "organic_tiktok_profile_daily",
+    ]
 
 
 def test_main_status_prints_single_json_line(monkeypatch, capsys):

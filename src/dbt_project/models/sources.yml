@@ -44,6 +44,15 @@ sources:
       - name: insights_daily
       - name: insights_totals
       - name: business_profile
+      # E (NOM-E1): append-only archive tables owned by the archiver (D) and
+      # stored next to the live tables in the same per-tenant schema. They are
+      # registered here so the organic marts can merge evicted history with the
+      # live serving set. Archiver naming/DDL/captured_at contracts unchanged.
+      # The child `__` table keeps its dlt name (insights_totals__breakdowns)
+      # and is registered-but-unconsumed in v1 (spec NOM-E-S2).
+      - name: insights_totals_history
+      - name: insights_totals__breakdowns_history
+      - name: follower_count_history
 
   - name: raw_tiktok_organic
     database: agency_dw
@@ -51,6 +60,9 @@ sources:
     tables:
       - name: profile_stats
       - name: videos_organic
+      # E (NOM-E1): append-only archive table (archiver D); registered so
+      # organic_tiktok_profile_daily can rebuild the multi-day run series.
+      - name: profile_stats_history
 
   - name: raw_youtube
     database: agency_dw
