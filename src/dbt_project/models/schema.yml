@@ -342,3 +342,115 @@ models:
       - name: client_id
         tests:
           - not_null
+
+  # ===== ORGANIC MARTS (E) =====
+
+  - name: organic_instagram_totals
+    description: |-
+      Window-grain Instagram totals per client (ORG-R1). One row per
+      (client_id, date_start, date_end) — windows never fan out to daily rows.
+      Live serving set merged FULL OUTER with the insights_totals_history
+      archive on the window key, live-first; history supplies windows evicted
+      (>90d) from live. window_label marks provenance: 'recency' when live
+      serves the window, 'archived' when only history holds it. The 9 common
+      metrics COALESCE(live, history); the 2 gated metrics
+      (follows_and_unfollows, profile_links_taps) are served only for the
+      current window and are NULL elsewhere.
+    tests:
+      # Composite-key grain guard. dbt-core's built-in `unique` accepts a
+      # single column_name, so the compound key is expressed as a concatenated
+      # column expression (supported dbt >= 1.10.5; corrected at apply, slice
+      # B WU-E4 — semantics unchanged from the original compound-key intent).
+      - unique:
+          arguments:
+            column_name: "(client_id::varchar || '|' || date_start::text || '|' || date_end::text)"
+    columns:
+      - name: client_id
+        description: Client identifier stamped from var('client_id').
+        tests:
+          - not_null
+      - name: date_start
+        description: Start of the IG totals reporting window (inclusive).
+        tests:
+          - not_null
+      - name: date_end
+        description: End of the IG totals reporting window (inclusive).
+        tests:
+          - not_null
+      - name: window_label
+        description: |-
+          Provenance of the winning row — 'recency' when the live set serves
+          the window, 'archived' when only the archive holds it.
+        tests:
+          - accepted_values:
+              arguments:
+                values: ["recency", "archived"]
+      - name: follows_and_unfollows
+        description: |-
+          Gated metric served only for the current window (max date_end);
+          NULL outside it (never fabricated from history).
+      - name: profile_links_taps
+        description: |-
+          Gated metric served only for the current window (max date_end);
+          NULL outside it (never fabricated from history).
+
+  - name: organic_instagram_daily
+    description: |-
+      Daily Instagram reach/follower mart per client (ORG-R2). One row per
+      (client_id, report_date); a row exists when either the live daily set or
+      the follower_count_history archive holds the date. reach comes from live
+      only (NULL on history-only days); follower COALESCEs live value to the
+      archived value — a NULL live follower is a no-data marker, never 0, and
+      never shadows an archived value beyond the 30d live horizon.
+    tests:
+      # Composite-key grain guard (concat-expression route, see totals block).
+      - unique:
+          arguments:
+            column_name: "(client_id::varchar || '|' || report_date::text)"
+    columns:
+      - name: client_id
+        description: Client identifier stamped from var('client_id').
+        tests:
+          - not_null
+      - name: report_date
+        description: Reporting day of the IG reach/follower series.
+        tests:
+          - not_null
+      - name: reach
+        description: |-
+          Daily reach from the live set only; NULL on days served solely by
+          the archive.
+      - name: follower_count
+        description: |-
+          Daily follower count — live value when inside the 30d horizon and
+          non-NULL, otherwise the archived value; never 0 for a no-data day.
+
+  - name: organic_tiktok_profile_daily
+    description: |-
+      Daily TikTok organic profile mart per client (ORG-R3). One row per run
+      day (client_id, report_date) exposing the 4 profile counts; live set
+      merged FULL OUTER with the profile_stats_history archive, live winning
+      a same-day duplicate. ARC-R6 capture-gap limitation: series depth equals
+      run days only — days without a pipeline run are absent, never zero.
+    tests:
+      # Composite-key grain guard (concat-expression route, see totals block).
+      - unique:
+          arguments:
+            column_name: "(client_id::varchar || '|' || report_date::text)"
+    columns:
+      - name: client_id
+        description: Client identifier stamped from var('client_id').
+        tests:
+          - not_null
+      - name: report_date
+        description: Run day of the TikTok organic profile series.
+        tests:
+          - not_null
+      - name: follower_count
+        description: Profile follower count for the run day.
+      - name: following_count
+        description: Profile following count for the run day.
+      - name: likes_count
+        description: Profile lifetime likes count for the run day.
+      - name: video_count
+        description: Profile video count for the run day.
