@@ -22,6 +22,7 @@ boundaries are deterministic (frozen-now pattern, design NFR-2).
 """
 
 import os
+from argparse import Namespace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
@@ -619,6 +620,316 @@ def test_source_resource_order_totals_before_daily(monkeypatch):
         "insights_daily",
         "business_profile",
     ]
+
+
+# ─── SDD-D archive (WU2): in-memory capture + post-run glue ────────────────
+
+
+def test_archive_capture_totals_appends_rows_pre_yield(monkeypatch):
+    """SDD-D WU2 (ARC-S1 capture seam; G2): ``capture=`` on get_insights_totals
+    appends each window row pre-yield, carrying its nested breakdown children so
+    flatten_breakdowns can rebuild the child natural keys from the parent window.
+    Without the kw the resource behavior is byte-identical (default None)."""
+    _freeze_now(monkeypatch)
+    monkeypatch.setattr(f"{MODULE}.requests.get", _totals_fake())
+
+    capture = {"totals": [], "follower": []}
+    source = ig.instagram_source("test_biz_456", "mock_token", capture=capture)
+    rows = list(source.resources["insights_totals"])
+
+    assert len(rows) == 3
+    assert capture["totals"] == rows, "every yielded window row was captured"
+    assert {(r["date_start"], r["date_end"]) for r in capture["totals"]} == {
+        ("2026-08-05", "2026-09-03"),
+        ("2026-07-06", "2026-08-04"),
+        ("2026-06-06", "2026-07-05"),
+    }
+    for row in capture["totals"]:
+        assert "breakdowns" in row
+        for child in row["breakdowns"]:
+            assert set(child) == {"metric", "breakdown", "dimension_value", "value"}
+
+    # Default (no capture kw) keeps the existing resource behavior untouched.
+    source = ig.instagram_source("test_biz_456", "mock_token")
+    assert len(list(source.resources["insights_totals"])) == 3
+
+
+def test_archive_capture_follower_only_servable_series(monkeypatch):
+    """SDD-D WU2 (G4/CATCH-R3): capture on get_insights keeps only the
+    trailing-30d rows where the API answered follower_count; older all-NULL
+    daily rows are never captured and reach never travels."""
+    _freeze_now(monkeypatch)
+    monkeypatch.setattr(f"{MODULE}.requests.get", _daily_fake(record=[]))
+
+    capture = {"totals": [], "follower": []}
+    source = ig.instagram_source(
+        "test_biz_456", "mock_token", insights_days_back=65, capture=capture
+    )
+    rows = list(source.resources["insights_daily"])
+
+    assert len(rows) == 65
+    fc_window_start = (NOW - timedelta(days=30)).date().isoformat()
+    recent = [r for r in rows if r["report_date"] >= fc_window_start]
+    assert capture["follower"] == recent, "only the servable 30d series is captured"
+    assert all(r["follower_count"] is not None for r in capture["follower"])
+    assert capture["totals"] == []
+
+
+def test_archive_capture_rerun_same_natural_key_sets(monkeypatch):
+    """SDD-D WU2 (ARC-S2/S2b offline; NFR-3): two runs over the same servable
+    fetch capture identical totals-window keys and identical child-breakdown
+    keys, so a DO NOTHING re-run can never duplicate."""
+    _freeze_now(monkeypatch)
+    monkeypatch.setattr(f"{MODULE}.requests.get", _totals_fake())
+
+    def run_once():
+        capture = {"totals": [], "follower": []}
+        source = ig.instagram_source("test_biz_456", "mock_token", capture=capture)
+        list(source.resources["insights_totals"])
+        window_keys = {(r["date_start"], r["date_end"]) for r in capture["totals"]}
+        child_keys = {
+            (p["date_start"], p["date_end"], c["metric"], c["breakdown"], c["dimension_value"])
+            for p in capture["totals"]
+            for c in p["breakdowns"]
+        }
+        return window_keys, child_keys
+
+    first = run_once()
+    second = run_once()
+    assert first == second
+    assert len(first[0]) == 3
+    assert len(first[1]) > 0
+
+
+def test_archive_capture_issues_no_extra_api_requests(monkeypatch):
+    """SDD-D WU2 (NFR-2/ARC-S1): enabling capture adds zero API requests — the
+    recorded fetch equals the run without capture exactly."""
+    _freeze_now(monkeypatch)
+
+    baseline_record: list[dict[str, Any]] = []
+    monkeypatch.setattr(f"{MODULE}.requests.get", _totals_fake(record=baseline_record))
+    source = ig.instagram_source("test_biz_456", "mock_token")
+    baseline = list(source.resources["insights_totals"])
+    baseline_calls = list(baseline_record)
+
+    capture_record: list[dict[str, Any]] = []
+    monkeypatch.setattr(f"{MODULE}.requests.get", _totals_fake(record=capture_record))
+    capture = {"totals": [], "follower": []}
+    source = ig.instagram_source("test_biz_456", "mock_token", capture=capture)
+    captured_rows = list(source.resources["insights_totals"])
+
+    assert captured_rows == baseline
+    assert len(capture["totals"]) == 3
+    assert capture_record == baseline_calls, "capture must not add API requests"
+
+
+def test_archive_capture_empty_windows_nothing_captured(monkeypatch):
+    """SDD-D WU2 (CATCH-S2/ARC-S4): a run whose windows all answer ``data: []``
+    has zero rows, so nothing is captured — no invented dates or zeros."""
+    _freeze_now(monkeypatch)
+    monkeypatch.setattr(f"{MODULE}.requests.get", _totals_fake(common_empty_offsets={0, 30, 60}))
+    capture = {"totals": [], "follower": []}
+    source = ig.instagram_source("test_biz_456", "mock_token", capture=capture)
+    assert list(source.resources["insights_totals"]) == []
+    assert capture["totals"] == []
+    assert capture["follower"] == []
+
+
+def test_archive_capture_all_null_follower_nothing_captured(monkeypatch):
+    """SDD-D WU2 (CATCH-R3): an empty follower series leaves daily rows all
+    NULL and captures nothing."""
+    _freeze_now(monkeypatch)
+    monkeypatch.setattr(f"{MODULE}.requests.get", _daily_fake(record=[]))
+    monkeypatch.setattr(f"{MODULE}._fetch_follower_count", lambda *a, **k: {})
+
+    capture = {"totals": [], "follower": []}
+    source = ig.instagram_source(
+        "test_biz_456", "mock_token", insights_days_back=65, capture=capture
+    )
+    rows = list(source.resources["insights_daily"])
+    assert len(rows) == 65
+    assert all(r["follower_count"] is None for r in rows)
+    assert capture["follower"] == []
+
+
+# ─── SDD-D archive (WU2): main glue — D6 post-run, ARC-S5 fail-loud ─────────
+
+
+def _patch_instagram_main_env(monkeypatch, tmp_path):
+    """Point ``run_instagram.main`` at a temp client YAML + env token (the
+    CLIENTS_DIR pattern used by the other connector main tests)."""
+    config = {
+        "active": True,
+        "connectors": {
+            "instagram": {
+                "enabled": True,
+                "instagram_business_id": "test_biz_456",
+                "token_env": "INSTAGRAM_ARCHIVE_TOKEN",
+                "insights_days_back": 65,
+            }
+        },
+    }
+    client_dir = tmp_path / "clients"
+    client_dir.mkdir()
+    with open(client_dir / "test_client.yml", "w") as f:
+        yaml.dump(config, f)
+    monkeypatch.setattr(
+        f"{MODULE}.argparse.ArgumentParser.parse_args",
+        lambda self: Namespace(client="test_client"),
+    )
+    monkeypatch.setitem(os.environ, "CLIENTS_DIR", str(client_dir))
+    monkeypatch.setitem(os.environ, "INSTAGRAM_ARCHIVE_TOKEN", "mock_token")
+
+
+class _RecordingSqlClient:
+    """Mirrors the dlt sql_client surface used by the glue: a context manager
+    whose ``__enter__`` yields the object exposing ``execute_sql``."""
+
+    def __init__(self) -> None:
+        self.statements: list[tuple[str, tuple]] = []
+
+    def __enter__(self) -> "_RecordingSqlClient":
+        return self
+
+    def __exit__(self, *exc_info: Any) -> None:
+        return None
+
+    def execute_sql(self, sql: str, *params: Any) -> None:
+        self.statements.append((sql, params))
+
+
+class _DrainingPipeline:
+    """Fake pipeline whose run() drains the capture-bearing resources (mirrors
+    real dlt extraction) and whose sql_client() records the archive calls."""
+
+    def __init__(self, sql_client: _RecordingSqlClient) -> None:
+        self._sql_client = sql_client
+        self.extracted: list[tuple[str, int]] = []
+
+    def run(self, source) -> str:
+        for name in ("insights_totals", "insights_daily"):
+            rows = list(source.resources[name])
+            self.extracted.append((name, len(rows)))
+        return "fake run ok"
+
+    def sql_client(self) -> _RecordingSqlClient:
+        return self._sql_client
+
+
+class _FailingSqlPipeline:
+    """Fake pipeline whose archive sql_client fails (ARC-S5 fail-loud)."""
+
+    def run(self, source) -> str:
+        return "fake run ok"
+
+    def sql_client(self) -> None:
+        raise RuntimeError("postgres connection lost")
+
+
+def _archive_main_fake(record=None, *, empty=False):
+    """requests.get fake serving a full IG main run (totals + daily resources).
+
+    ``empty=True`` makes every totals window and the follower series answer
+    ``data: []`` while reach still serves daily rows (CATCH-S2/ARC-S4 shape).
+    """
+    record = [] if record is None else record
+    totals_fake = _totals_fake(record=record, common_empty_offsets={0, 30, 60} if empty else None)
+    daily_fake = _daily_fake(record=record)
+
+    def mock_get(url, params=None):
+        params = params or {}
+        if params.get("metric") == "follower_count" and empty:
+            return _mock_json({"data": []})
+        if params.get("metric_type") == "time_series":
+            return daily_fake(url, params)
+        return totals_fake(url, params)
+
+    return mock_get
+
+
+def test_archive_main_success_exits_zero_and_persists_capture(monkeypatch, tmp_path):
+    """SDD-D WU2 (D6 glue; ARC-R3): after a healthy pipeline.run the main
+    executes idempotent DDL for the three ``_history`` tables and one guarded
+    multi-row INSERT per table, every row sharing the run's ``captured_at``;
+    exit stays 0 (no SystemExit)."""
+    _freeze_now(monkeypatch)
+    _patch_instagram_main_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(f"{MODULE}.requests.get", _archive_main_fake())
+    sql_client = _RecordingSqlClient()
+    pipeline_fake = _DrainingPipeline(sql_client)
+    monkeypatch.setattr(f"{MODULE}.dlt.pipeline", lambda **kw: pipeline_fake)
+
+    ig.main()  # success path: no SystemExit
+
+    assert pipeline_fake.extracted == [("insights_totals", 3), ("insights_daily", 65)]
+    statements = sql_client.statements
+    assert len(statements) == 6, "3 DDL + 3 INSERT statements"
+    assert len([s for s, _ in statements if s.startswith("CREATE TABLE IF NOT EXISTS")]) == 3
+    inserts = [s for s, _ in statements if s.startswith("INSERT INTO")]
+    assert len(inserts) == 3
+    for table in (
+        "insights_totals_history",
+        "insights_totals__breakdowns_history",
+        "follower_count_history",
+    ):
+        assert any(f'"raw_instagram_test_client"."{table}"' in s for s, _ in statements)
+
+    totals_params = next(
+        p for s, p in statements if s.startswith("INSERT INTO") and "insights_totals_history" in s
+    )
+    follower_params = next(
+        p for s, p in statements if s.startswith("INSERT INTO") and "follower_count_history" in s
+    )
+    child_params = next(
+        p
+        for s, p in statements
+        if s.startswith("INSERT INTO") and "insights_totals__breakdowns_history" in s
+    )
+    # metric_columns come from the connector constants (single source of truth):
+    # window(2) + COMMON + GATED + captured_at per row, one captured_at per row.
+    metric_count = len(ig.TOTAL_VALUE_COMMON_METRICS) + len(ig.TOTAL_VALUE_GATED_METRICS)
+    totals_cols = 2 + metric_count + 1
+    assert len(totals_params) == 3 * totals_cols
+    assert totals_params[0] == "2026-08-05" and totals_params[1] == "2026-09-03"
+    assert all(p == NOW for p in totals_params[totals_cols - 1 :: totals_cols])
+    assert len(follower_params) == 30 * 3
+    assert all(p == NOW for p in follower_params[2::3])
+    assert len(child_params) > 0 and len(child_params) % 7 == 0
+    assert all(p == NOW for p in child_params[6::7])
+
+
+def test_archive_main_empty_capture_ddl_only_exit_zero(monkeypatch, tmp_path):
+    """SDD-D WU2 (CATCH-S2/ARC-S4): no servable data -> the glue creates the
+    tables but issues zero INSERT statements and the main exits 0."""
+    _freeze_now(monkeypatch)
+    _patch_instagram_main_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(f"{MODULE}.requests.get", _archive_main_fake(empty=True))
+    sql_client = _RecordingSqlClient()
+    pipeline_fake = _DrainingPipeline(sql_client)
+    monkeypatch.setattr(f"{MODULE}.dlt.pipeline", lambda **kw: pipeline_fake)
+
+    ig.main()
+
+    assert pipeline_fake.extracted == [("insights_totals", 0), ("insights_daily", 65)]
+    statements = sql_client.statements
+    assert len(statements) == 3
+    assert all(s.startswith("CREATE TABLE IF NOT EXISTS") for s, _ in statements)
+    assert not any(s.startswith("INSERT INTO") for s, _ in statements)
+
+
+def test_archive_main_sql_client_failure_exits_one(monkeypatch, tmp_path, capsys):
+    """SDD-D WU2 (ARC-S5, threat row process integration): a DB failure during
+    the post-run archive prints the fail-loud marker and exits 1, so the
+    existing ``dlt_instagram`` audit step reports failed."""
+    _freeze_now(monkeypatch)
+    _patch_instagram_main_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(f"{MODULE}.dlt.pipeline", lambda **kw: _FailingSqlPipeline())
+
+    with pytest.raises(SystemExit) as excinfo:
+        ig.main()
+
+    assert excinfo.value.code == 1
+    assert "[INSTAGRAM] Archive failed" in capsys.readouterr().out
 
 
 # ─── Unchanged healthy behavior (media / profile guard / template contract) ─

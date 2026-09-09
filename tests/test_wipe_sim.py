@@ -26,6 +26,31 @@ substitute can prove (spec A/B/C/D/G + NFR-4):
   connectors; no legacy shared ``raw_*`` appears.
 * freeze-regression DB gate (design D8): ``check_table_via_db`` with
   ``client_id`` resolves ``raw_instagram_acme`` and reports real freeze state.
+* SDD-D archive gate (WU4, obs #602): the append-only ``_history`` archiver is
+  exercised on the real sim postgres through its own replica of the connector
+  glue (archive_synthetic.py) fed by the same corrida fixtures that seed the
+  live tables (seed_synthetic.py):
+  * CATCH-S1/ARC-S2/S2b — a simulated mid-archive crash leaves a subset of
+    natural keys archived; the full retry completes the missing follower keys
+    and does NOT duplicate totals/child rows (DO NOTHING keeps ``captured_at``).
+  * ARC-S3 — corrida K archives window W; corrida K+1 replaces the live
+    tables without W: W is evicted from ``insights_totals`` yet survives in
+    ``insights_totals_history`` with its original ``captured_at``.
+  * TEN-S1 — acme + nike IG/TikTok archive rows land only in each tenant's own
+    ``raw_instagram_<c>``/``raw_tiktok_organic_<c>``; nike's replace+archive
+    re-run leaves acme's archive tables byte-identical (NFR-4-type assert).
+  * TEN-S2 — tables created AFTER the RBAC gate is enabled are SELECTable by
+    ``metabase_reader`` without re-running init 02 (global default privileges,
+    design gate G3 evidence).
+  * cp_nfr4 catalog extends by the four ``_history``-hosting raw schemas
+    (raw_instagram_acme/nike, raw_tiktok_organic_acme/nike).
+* SDD-E organic gate (WU-E4, spec E VER-R1/ORG/NOM-E/HIG): after the acme
+  archive story the isolated stack runs REAL ``dbt run`` (organic staging +
+  3 ``organic_*`` marts), the repo's first automated ``dbt test``, and ``dbt
+  ls`` over acme — asserting ORG-S1..S7 (evicted window from history, no daily
+  fan-out, gated NULL, follower>30d COALESCE, history-only reach NULL, TT
+  multi-day, duplicate-key guard), NOM-E-S1 (4 ``_history`` sources resolve),
+  NOM-E-S2 (breakdowns source unconsumed) and HIG-S1 (no real client id).
 
 The user's real stack (agency_postgres/agency_pipeline/db_pgdata/agency_*_net)
 is NEVER started, stopped, written or recreated: it is snapshotted before and
@@ -209,6 +234,42 @@ def seed(client: str, connector: str | None = None) -> None:
     exec_pipeline("/app", cmd)
 
 
+def seed_corrida(client: str, connector: str, corrida: str) -> None:
+    """WU4 live state: seed one archive connector at corrida K or K+1."""
+    exec_pipeline(
+        "/app",
+        [
+            "python",
+            "/app/wipesim/seed_synthetic.py",
+            "--client",
+            client,
+            "--connector",
+            connector,
+            "--corrida",
+            corrida,
+        ],
+    )
+
+
+def archive_synthetic(
+    client: str, connector: str, corrida: str, skip_follower: bool = False
+) -> None:
+    """WU4: run the archive glue replica for one (client, connector, corrida)."""
+    cmd = [
+        "python",
+        "/app/wipesim/archive_synthetic.py",
+        "--client",
+        client,
+        "--connector",
+        connector,
+        "--corrida",
+        corrida,
+    ]
+    if skip_follower:
+        cmd.append("--skip-follower")
+    exec_pipeline("/app", cmd)
+
+
 def fingerprint_raw(client: str, conn: str) -> str:
     return psql(
         "SELECT count(*) || ':' || md5(string_agg(ad_id || '|' || spend::text, ','"
@@ -216,25 +277,83 @@ def fingerprint_raw(client: str, conn: str) -> str:
     )
 
 
-def run_dbt(client_id: str, select_models: str, tag: str) -> None:
-    """dbt run with real pipeline select (pipeline.sh contract), /tmp artifacts."""
-    exec_pipeline(
-        "/app/src/dbt_project",
-        [
-            "dbt",
-            "run",
-            "--select",
-            select_models,
-            "--vars",
-            json.dumps({"client_id": client_id}),
-            "--profiles-dir",
-            ".",
-            "--target-path",
-            f"/tmp/dbt_target_{tag}",
-            "--log-path",
-            f"/tmp/dbt_log_{tag}",
-        ],
+# WU4 archive tables per connector (NOM-R1 names; child keeps the dlt ``__``).
+ARCHIVE_TABLES: dict[str, tuple[str, ...]] = {
+    "instagram": (
+        "insights_totals_history",
+        "insights_totals__breakdowns_history",
+        "follower_count_history",
+    ),
+    "tiktok_organic": ("profile_stats_history",),
+}
+
+# E organic gate (WU-E4): staging ancestors of the three organic marts that
+# the wipe-sim can actually build. build_plan(['instagram','tiktok_organic'])
+# also lists stg_instagram__media / stg_tiktok_organic__videos_organic (and
+# the monitoring chain), whose raw parents the sim never seeds; these three
+# views sit exactly over the seeded archive-connector raw tables.
+ORGANIC_MART_STAGING: tuple[str, ...] = (
+    "stg_instagram__insights_totals",
+    "stg_instagram__insights_daily",
+    "stg_tiktok_organic__profile_stats",
+)
+
+
+def fingerprint_archive(client: str, conn: str, table: str) -> str:
+    """(count, md5) over a ``_history`` table's rows text-sorted — byte-identity
+    fingerprint for the TEN-S1 cross-tenant re-run assert (NFR-4 type)."""
+    return psql(
+        "SELECT count(*)::text || ':' || "
+        "COALESCE(md5(string_agg(x.r, ',' ORDER BY x.r)), 'empty') "
+        f"FROM (SELECT t::text AS r FROM raw_{conn}_{client}.{table} t) x"
     )
+
+
+def archive_fingerprints(client: str) -> dict[str, str]:
+    return {
+        f"{conn}.{table}": fingerprint_archive(client, conn, table)
+        for conn, tables in ARCHIVE_TABLES.items()
+        for table in tables
+    }
+
+
+def captured_at_epoch(client: str, conn: str, table: str) -> str:
+    """Single run timestamp of a ``_history`` table (min epoch; every row of one
+    archive run shares it — ARC-R3). Schema = ``raw_<conn>_<client>``."""
+    return psql(
+        f"SELECT min(extract(epoch from captured_at))::text FROM raw_{conn}_{client}.{table}"
+    )
+
+
+def run_dbt(
+    client_id: str,
+    select_models: str,
+    tag: str,
+    command: str = "run",
+    *,
+    check: bool = True,
+    extra: tuple[str, ...] = (),
+) -> subprocess.CompletedProcess:
+    """Run a dbt ``command`` (``run``/``test``/``ls``) against the real
+    pipeline select (pipeline.sh contract) with ``client_id`` vars, /tmp
+    artifacts. ``select_models`` may be empty (whole-project listing, e.g.
+    ``dbt ls --resource-type source``). ``check=False`` returns the process so
+    callers can assert a failing dbt exit (ORG-S7)."""
+    args = ["dbt", command]
+    if select_models:
+        args += ["--select", select_models]
+    args += [
+        "--vars",
+        json.dumps({"client_id": client_id}),
+        "--profiles-dir",
+        ".",
+        "--target-path",
+        f"/tmp/dbt_target_{tag}",
+        "--log-path",
+        f"/tmp/dbt_log_{tag}",
+        *extra,
+    ]
+    return exec_pipeline("/app/src/dbt_project", args, check=check)
 
 
 # Scenario checkpoints --------------------------------------------------------
@@ -395,9 +514,10 @@ def cp_d_gate_off_on() -> None:
 
 
 def cp_b_s2_teardown() -> None:
-    """B-S2/B-R5: DROP SCHEMA client_nike CASCADE + raw drop leaves acme intact."""
+    """B-S2/B-R5: DROP SCHEMA client_nike CASCADE + raw drops (incl. the WU4
+    archive raw schemas) leaves acme intact."""
     psql("DROP SCHEMA IF EXISTS client_nike CASCADE")
-    for conn in ("meta", "tiktok", "google"):
+    for conn in ("meta", "tiktok", "google", "instagram", "tiktok_organic"):
         psql(f"DROP SCHEMA IF EXISTS raw_{conn}_nike CASCADE")
     assert (
         psql_rows(
@@ -426,8 +546,428 @@ def cp_g_s1() -> None:
     assert zeta_raw == [], f"G-S1: zeta schemas created for zero-connector client: {zeta_raw}"
 
 
+# ─── SDD-D archive checkpoints (WU4; run before cp_nfr4 / RBAC enable) ─────
+
+
+def cp_archive_live_seed_k() -> None:
+    """Seed the WU4 archive live fixtures for acme + nike at corrida K.
+
+    Creates the four ``raw_instagram_<c>`` / ``raw_tiktok_organic_<c>`` schemas
+    (TEN-R1) with the corrida-K live tables (totals window W + CUR, follower
+    series, profile_stats row). The schemas must exist BEFORE cp_nfr4 (catalog)
+    and BEFORE the RBAC gate enable; the ``_history`` tables are created later
+    by archive_synthetic runs (TEN-S2 needs at least one post-enable creation).
+    """
+    for client in ("acme", "nike"):
+        for connector in ("instagram", "tiktok_organic"):
+            seed_corrida(client, connector, "K")
+    for client in ("acme", "nike"):
+        for conn in ("instagram",):
+            assert psql(f"SELECT count(*) FROM raw_{conn}_{client}.insights_totals") == "2", (
+                f"WU4 {client}: corrida K live totals count"
+            )
+            assert (
+                psql(
+                    "SELECT count(*) FROM raw_instagram_"
+                    f"{client}.insights_totals WHERE date_start = '2026-06-01'"
+                )
+                == "1"
+            ), f"WU4 {client}: window W missing from live totals at corrida K"
+            assert (
+                psql(f"SELECT count(*) FROM raw_instagram_{client}.insights_totals__breakdowns")
+                == "4"
+            ), f"WU4 {client}: live breakdown child rows at corrida K"
+            # E (D5): acme's live follower series at corrida K gained the mid
+            # day 2026-08-05 (older 2 + mid 1 + recent 3 = 6); nike is
+            # untouched (older 2 + recent 3 = 5).
+            expected_live_follower = "6" if client == "acme" else "5"
+            assert psql(f"SELECT count(*) FROM raw_instagram_{client}.insights_daily") == (
+                expected_live_follower
+            ), f"WU4 {client}: live follower series rows at corrida K"
+        assert psql(f"SELECT count(*) FROM raw_tiktok_organic_{client}.profile_stats") == "1", (
+            f"WU4 {client}: live profile_stats row at corrida K"
+        )
+
+
+def cp_archive_acme() -> dict[str, str]:
+    """Acme archive story: CATCH-S1 subset/retry, ARC-S2/S2b, ARC-S3, TTK rows.
+
+    Runs the glue replica against the corrida-K live state seeded above:
+    1. ``--skip-follower`` simulates a mid-archive crash (CATCH-S1 subset):
+       totals + child natural keys archived, follower keys missing.
+    2. full retry completes the follower keys and does NOT duplicate totals or
+       child rows — the original ``captured_at`` is preserved (DO NOTHING).
+    3. corrida K+1 replaces the live tables without window W (ARC-S3): W is
+       absent from ``insights_totals`` yet still present in the archive with
+       its first-run timestamp; child rows dedupe (ARC-S2b).
+    4. TikTok profile_stats rows accumulate per corrida (ARC-R6).
+
+    Returns the acme archive fingerprints for the TEN-S1 byte-identity assert.
+    """
+    # 1) CATCH-S1 partial state: totals + child archived, follower not.
+    archive_synthetic("acme", "instagram", "K", skip_follower=True)
+    for table, count in (
+        ("insights_totals_history", "2"),
+        ("insights_totals__breakdowns_history", "4"),
+    ):
+        assert psql(f"SELECT count(*) FROM raw_instagram_acme.{table}") == count, (
+            f"CATCH-S1: acme {table} count after partial archive"
+        )
+    assert (
+        psql(
+            "SELECT count(*) FROM information_schema.tables "
+            "WHERE table_schema = 'raw_instagram_acme' "
+            "AND table_name = 'follower_count_history'"
+        )
+        == "0"
+    ), "CATCH-S1: follower table exists although the crash preceded it"
+    t1 = captured_at_epoch("acme", "instagram", "insights_totals_history")
+    for table in ("insights_totals_history", "insights_totals__breakdowns_history"):
+        assert psql("SELECT count(DISTINCT captured_at) FROM raw_instagram_acme." + table) == "1", (
+            f"ARC-R3: acme {table} captured_at not run-uniform"
+        )
+
+    # 2) CATCH-S1 full retry: missing follower keys archived, no duplicates.
+    archive_synthetic("acme", "instagram", "K")
+    # E (D5): the acme corrida-K follower set is older(2) + mid(1: 2026-08-05)
+    # + recent(3) = 6 archived keys.
+    assert psql("SELECT count(*) FROM raw_instagram_acme.follower_count_history") == "6", (
+        "CATCH-S1: retry did not complete the follower keys"
+    )
+    follower_t1 = captured_at_epoch("acme", "instagram", "follower_count_history")
+    for table, count in (
+        ("insights_totals_history", "2"),
+        ("insights_totals__breakdowns_history", "4"),
+    ):
+        assert psql(f"SELECT count(*) FROM raw_instagram_acme.{table}") == count, (
+            f"CATCH-S1: retry duplicated {table} rows"
+        )
+        assert captured_at_epoch("acme", "instagram", table) == t1, (
+            f"CATCH-S1/ARC-S2: retry overwrote {table} first-write captured_at"
+        )
+
+    # 3) ARC-S3: corrida K+1 replaces live without W; archive keeps W @T1.
+    seed_corrida("acme", "instagram", "K+1")
+    assert (
+        psql(
+            "SELECT count(*) FROM raw_instagram_acme.insights_totals "
+            "WHERE date_start = '2026-06-01'"
+        )
+        == "0"
+    ), "ARC-S3: window W still served by live table after corrida K+1"
+    assert psql("SELECT count(*) FROM raw_instagram_acme.insights_totals") == "1", (
+        "ARC-S3: corrida K+1 live totals count"
+    )
+    assert (
+        psql(
+            "SELECT count(*) FROM raw_instagram_acme.insights_daily "
+            "WHERE report_date < '2026-08-01'"
+        )
+        == "0"
+    ), "ARC-S3: evicted follower rows still in live insights_daily"
+    archive_synthetic("acme", "instagram", "K+1")
+    assert (
+        psql(
+            "SELECT count(*) FROM raw_instagram_acme.insights_totals_history "
+            "WHERE date_start = '2026-06-01'"
+        )
+        == "1"
+    ), "ARC-S3: window W lost from insights_totals_history after K+1"
+    assert (
+        psql("SELECT count(*) FROM raw_instagram_acme.insights_totals__breakdowns_history") == "4"
+    ), "ARC-S2b: breakdown child archive duplicated across corridas"
+    for table, count in (
+        ("insights_totals_history", "2"),
+        ("insights_totals__breakdowns_history", "4"),
+        # E (D5): acme archived follower keys = 6 (mid day included); the K+1
+        # NULL-marker row is dropped by the flattener, so the count holds.
+        ("follower_count_history", "6"),
+    ):
+        assert psql(f"SELECT count(*) FROM raw_instagram_acme.{table}") == count, (
+            f"ARC-S2/ARC-S3: {table} row count after corrida K+1"
+        )
+    for table in ("insights_totals_history", "insights_totals__breakdowns_history"):
+        assert captured_at_epoch("acme", "instagram", table) == t1, (
+            f"ARC-S3/ARC-S2: {table} captured_at changed after corrida K+1"
+        )
+    assert captured_at_epoch("acme", "instagram", "follower_count_history") == follower_t1, (
+        "ARC-S3/ARC-S2: follower_count_history captured_at changed after corrida K+1"
+    )
+
+    # 4) TikTok: profile rows accumulate per corrida (ARC-R6).
+    archive_synthetic("acme", "tiktok_organic", "K")
+    assert psql("SELECT count(*) FROM raw_tiktok_organic_acme.profile_stats_history") == "1"
+    seed_corrida("acme", "tiktok_organic", "K+1")
+    assert (
+        psql(
+            "SELECT count(*) FROM raw_tiktok_organic_acme.profile_stats "
+            "WHERE report_date = '2026-09-01'"
+        )
+        == "0"
+    ), "ARC-R6: prior profile row still live after corrida K+1"
+    archive_synthetic("acme", "tiktok_organic", "K+1")
+    rows = psql_rows(
+        "SELECT report_date::text FROM raw_tiktok_organic_acme.profile_stats_history "
+        "ORDER BY report_date"
+    )
+    assert rows == ["2026-09-01", "2026-09-02"], f"ARC-R6: acme profile_stats_history rows: {rows}"
+    return archive_fingerprints("acme")
+
+
+def cp_archive_nike_ten(acme_before: dict[str, str]) -> None:
+    """Nike archive story AFTER the RBAC gate enable: TEN-S2 grants + TEN-S1.
+
+    The nike ``_history`` tables are created for the first time HERE, i.e. after
+    cp_d_gate_off_on enabled ``metabase_reader`` and set the GLOBAL default
+    privileges — so their SELECT coverage can only come from the ADP (design
+    gate G3), never from the init catch-up. TEN-S2 asserts the reader can SELECT
+    them without re-running init 02. TEN-S1 then re-runs nike (replace + archive
+    at corrida K+1) and asserts acme's archive tables stay byte-identical and
+    that nike rows live only under nike's own schemas.
+    """
+    # TEN-S2: first nike archive run happens post-enable (tables created now).
+    archive_synthetic("nike", "instagram", "K")
+    archive_synthetic("nike", "tiktok_organic", "K")
+    for conn, table in (
+        ("instagram", "insights_totals_history"),
+        ("instagram", "follower_count_history"),
+        ("tiktok_organic", "profile_stats_history"),
+    ):
+        ok = reader_psql(f"SELECT count(*) FROM raw_{conn}_nike.{table}")
+        assert ok.returncode == 0 and ok.stdout.strip().isdigit(), (
+            f"TEN-S2: metabase_reader SELECT failed on {table}: {ok.stdout} {ok.stderr}"
+        )
+        assert (
+            psql(
+                "SELECT count(*) FROM information_schema.role_table_grants "
+                "WHERE grantee = 'metabase_reader' AND privilege_type = 'SELECT' "
+                f"AND table_schema = 'raw_{conn}_nike' AND table_name = '{table}'"
+            )
+            == "1"
+        ), f"TEN-S2: {table} reader grant missing or duplicated"
+    # TEN-S1: nike re-run (replace + archive at corrida K+1) leaves acme intact.
+    for connector in ("instagram", "tiktok_organic"):
+        seed_corrida("nike", connector, "K+1")
+        archive_synthetic("nike", connector, "K+1")
+    assert archive_fingerprints("acme") == acme_before, (
+        "TEN-S1: nike replace+archive changed acme archive tables"
+    )
+    assert psql("SELECT count(*) FROM raw_instagram_nike.insights_totals_history") == "2", (
+        "TEN-S1: nike totals archive count"
+    )
+    assert psql("SELECT count(*) FROM raw_instagram_nike.follower_count_history") == "5", (
+        "TEN-S1: nike follower archive count"
+    )
+    assert psql("SELECT count(*) FROM raw_tiktok_organic_nike.profile_stats_history") == "2", (
+        "TEN-S1: nike profile archive count"
+    )
+    # Client bias spot check: acme rows carry acme values, nike rows nike values.
+    assert psql("SELECT min(views) FROM raw_instagram_acme.insights_totals_history") == "1000"
+    assert psql("SELECT min(views) FROM raw_instagram_nike.insights_totals_history") == "2000"
+
+
+def cp_organic_marts() -> None:
+    """E organic gate (spec E VER-R1 / design D4/D5): first automated
+    ``dbt test`` execution, on real dbt run + test + ls over acme.
+
+    Invoked after ``cp_archive_acme`` (acme live @ corrida K+1 + full history)
+    and before ``cp_nfr4`` (dbt adds only ``client_acme`` objects — the catalog
+    assert stays safe; nike ``_history`` tables do not exist yet, so the
+    TEN-S2 order is untouched). Runs the organic plan for acme and asserts the
+    offline-unprovable spec-E scenarios: ORG-S1..S7 (window/unique outcomes),
+    NOM-E-S1 (4 ``_history`` sources resolve), NOM-E-S2 (breakdowns source
+    registered-but-unconsumed), HIG-S1 (no real client id).
+    """
+    from agency_analytics.pipeline_plan import build_plan, organic_marts
+
+    plan = build_plan(["instagram", "tiktok_organic"])
+    marts = organic_marts(["instagram", "tiktok_organic"])
+    assert len(marts) == 3 and "organic_tiktok_profile_daily" in marts, (
+        f"organic plan: unexpected resolver output {marts}"
+    )
+    # The wipe-sim seeds ONLY the archive-connector raw surfaces; build_plan
+    # also lists the IG media / TT videos staging models (and the monitoring
+    # chain), whose raw parents the sim never seeds — running them here would
+    # fail on missing relations. The organic marts' ancestors are exactly
+    # ORGANIC_MART_STAGING (the views over the seeded tables); selecting them
+    # explicitly avoids dbt run-select ancestor ambiguity (design D4). The
+    # assert keeps that constant consistent with the plan resolver's staging.
+    assert set(ORGANIC_MART_STAGING) <= set(plan.models), (
+        f"organic staging drift: {ORGANIC_MART_STAGING} vs {plan.models}"
+    )
+    select = " ".join(ORGANIC_MART_STAGING) + " " + " ".join(marts)
+    marts_select = " ".join(marts)
+
+    # VER-S1: real dbt run (staging views + organic marts) then explicit dbt
+    # test on the three marts — green unique/not_null/accepted_values.
+    run_dbt("acme", select, "organic", command="run")
+    run_dbt("acme", marts_select, "organic_test", command="test")
+
+    # ORG-S1/ORG-S3: window W (>90d, evicted from live at K+1) is served from
+    # insights_totals_history — common metrics from history (acme bias 1000 ->
+    # views 1000), window_label 'archived', gated metrics NULL (never
+    # fabricated from history).
+    w = psql_rows(
+        "SELECT window_label || ':' || views::text || ':' || "
+        "coalesce(follows_and_unfollows::text, 'NULL') || ':' || "
+        "coalesce(profile_links_taps::text, 'NULL') "
+        "FROM client_acme.organic_instagram_totals WHERE date_start = '2026-06-01'"
+    )
+    assert w == ["archived:1000:NULL:NULL"], f"ORG-S1/S3 window W row: {w}"
+    # ORG-S1/S2: current window is 'recency'; exactly one row per window key
+    # (no daily fan-out) and the current window answers the gated metric.
+    windows = psql_rows(
+        "SELECT date_start::text || '|' || date_end::text || '|' || window_label "
+        "FROM client_acme.organic_instagram_totals ORDER BY date_start"
+    )
+    assert windows == [
+        "2026-06-01|2026-06-30|archived",
+        "2026-08-01|2026-08-31|recency",
+    ], f"ORG-S2 window rows: {windows}"
+    cur = psql_rows(
+        "SELECT follows_and_unfollows::text FROM client_acme.organic_instagram_totals "
+        "WHERE date_end = '2026-08-31'"
+    )
+    assert cur == ["1001"], f"ORG-S3 current-window gated answer: {cur}"
+
+    # ORG-S4: acme 2026-08-05 — the K+1 live row carries the NULL no-data
+    # follower marker (reach present) while history holds the corrida-K value
+    # (bias*10+5 = 10005); the mart must read the archived value, never 0,
+    # never NULL-shadowed.
+    s4 = psql_rows(
+        "SELECT coalesce(reach::text, 'NULL') || ':' || follower_count::text "
+        "FROM client_acme.organic_instagram_daily WHERE report_date = '2026-08-05'"
+    )
+    assert s4 == ["1005:10005"], f"ORG-S4 08-05 follower merge: {s4}"
+    # ORG-S5: history-only day 06-11 keeps its row with reach NULL and
+    # follower from history (bias*10 + 11 = 10011).
+    s5 = psql_rows(
+        "SELECT coalesce(reach::text, 'NULL') || ':' || follower_count::text "
+        "FROM client_acme.organic_instagram_daily WHERE report_date = '2026-06-11'"
+    )
+    assert s5 == ["NULL:10011"], f"ORG-S5 history-only day: {s5}"
+    # ORG-S2/S6 grain: exact daily row set (older + mid + recent from both
+    # sources; no fan-out, no invented days).
+    daily = psql_rows(
+        "SELECT report_date::text FROM client_acme.organic_instagram_daily ORDER BY report_date"
+    )
+    assert daily == [
+        "2026-06-11",
+        "2026-06-12",
+        "2026-08-05",
+        "2026-08-11",
+        "2026-08-12",
+        "2026-08-13",
+    ], f"ORG-S2/S6 daily rows: {daily}"
+    # ORG-S6: TT profile series = the two run days (K + K+1), live/history
+    # merged; unique(client_id, report_date) already green via dbt test.
+    tt = psql_rows(
+        "SELECT report_date::text || ':' || follower_count::text "
+        "FROM client_acme.organic_tiktok_profile_daily ORDER BY report_date"
+    )
+    assert tt == ["2026-09-01:1001", "2026-09-02:1002"], f"ORG-S6 TT rows: {tt}"
+
+    # NOM-E-S1: dbt ls --resource-type source resolves all four `_history`
+    # tables at parse for the acme invocation (sources.yml jinja renders the
+    # raw_instagram_acme / raw_tiktok_organic_acme tenant schemas).
+    ls_out = run_dbt(
+        "acme",
+        "",
+        "organic_ls",
+        command="ls",
+        extra=("--resource-type", "source"),
+    ).stdout
+    for source_id in (
+        "raw_instagram.insights_totals_history",
+        "raw_instagram.insights_totals__breakdowns_history",
+        "raw_instagram.follower_count_history",
+        "raw_tiktok_organic.profile_stats_history",
+    ):
+        assert source_id in ls_out, f"NOM-E-S1: {source_id} absent from dbt ls:\n{ls_out}"
+
+    # NOM-E-S2: the breakdowns child source is registered-but-unconsumed in v1
+    # — no model under models/ may select it (offline twin of the test_archiver
+    # guard, asserted here against the mounted repo tree).
+    models_dir = Path(__file__).resolve().parent.parent / "src" / "dbt_project" / "models"
+    breakdowns_select = "source('raw_instagram', 'insights_totals__breakdowns_history')"
+    offenders = [
+        str(path)
+        for path in sorted(models_dir.rglob("*.sql"))
+        if breakdowns_select in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == [], f"NOM-E-S2: breakdowns source selected by: {offenders}"
+
+    # HIG-S1: the real tracked-only client never appears in the E wipe-sim
+    # surface (placeholders acme/nike/zeta only). Real ids are DERIVED from the
+    # repo clients dir so the identifier is never embedded in this file.
+    repo_clients = {
+        p.stem for p in (Path(__file__).resolve().parent.parent / "clients").glob("*.yml")
+    }
+    real_ids = sorted(repo_clients - {"acme", "nike", "zeta", "_template"})
+    e_files = [
+        Path(__file__).resolve(),
+        *sorted((Path(__file__).resolve().parent / "docker" / "wipe-sim" / "scripts").glob("*.py")),
+    ]
+    for real_id in real_ids:
+        hits = [str(p) for p in e_files if real_id in p.read_text(encoding="utf-8")]
+        assert hits == [], f"HIG-S1: real client id present in wipe-sim surface: {hits}"
+
+    # ORG-S7 (negative): the grain guard is real — a seeded duplicate window
+    # key makes the totals unique test FAIL; deleting the row re-greens it.
+    psql(
+        "INSERT INTO client_acme.organic_instagram_totals "
+        "(client_id, date_start, date_end, window_label, views) VALUES "
+        "('acme', '2026-06-01', '2026-06-30', 'recency', -1)"
+    )
+    dup = run_dbt("acme", "organic_instagram_totals", "organic_neg", command="test", check=False)
+    assert dup.returncode != 0, "ORG-S7: duplicate window key did not fail the unique test"
+    psql("DELETE FROM client_acme.organic_instagram_totals WHERE views = -1")
+    run_dbt("acme", "organic_instagram_totals", "organic_regreen", command="test")
+
+
+def cp_nightly_test_gate() -> None:
+    """SDD-F WU5 (NGT-R2/R3, design D6/D7): real dbt test over the nightly
+    acme select union — the first whole-nightly test-closure proof on the sim.
+
+    Invoked after ``cp_organic_marts`` (NOT after ``cp_b_s1_b_s3``): the IG/TT
+    raw surfaces and organic marts exist only after the D-era archive
+    checkpoints, so a real test there would fail on missing relations (design
+    D6 placement correction). ``dbt test`` adds no objects, so ``cp_nfr4``'s
+    catalog assert stays undisturbed.
+
+    The union mirrors the nightly ``${dbt_select}`` shape: ``dbt_plan_models()``
+    (B-S1 select: ads/campaigns staging + monitoring chain + investment marts)
+    plus the organic staging/marts over the archive-connector raw tables. The
+    cross-assert pins ORGANIC_MART_STAGING to the plan resolver (E-era guard).
+
+    Asserts exit-green (run_dbt check=True) + a PASS line in the dbt output
+    (NGT-S5/S6), then proves STG-S1 for real: whole-project ``dbt ls`` no
+    longer lists the two deleted orphan staging models.
+    """
+    from agency_analytics.pipeline_plan import build_plan, organic_marts
+
+    organic_plan = build_plan(["instagram", "tiktok_organic"])
+    assert set(ORGANIC_MART_STAGING) <= set(organic_plan.models), (
+        f"organic staging drift: {ORGANIC_MART_STAGING} vs {organic_plan.models}"
+    )
+    marts = organic_marts(["instagram", "tiktok_organic"])
+    assert len(marts) == 3 and "organic_tiktok_profile_daily" in marts, (
+        f"organic plan: unexpected resolver output {marts}"
+    )
+    union = " ".join([dbt_plan_models(), *ORGANIC_MART_STAGING, *marts])
+    out = run_dbt("acme", union, "nightly_gate", command="test")
+    assert "PASS" in out.stdout, f"nightly gate: dbt test not green:\n{out.stdout}"
+
+    # STG-S1 real: the whole-project ls drops the two deleted orphans.
+    ls_out = run_dbt("acme", "", "nightly_ls", command="ls").stdout
+    for orphan in ("stg_facebook__page_profile", "stg_instagram__business_profile"):
+        assert orphan not in ls_out, f"STG-S1: orphan still listed by dbt ls:\n{ls_out}"
+
+
 def cp_nfr4() -> None:
-    """NFR-4: exact catalog for 2 clients x 3 overlapping connectors; no legacy."""
+    """NFR-4: exact catalog for 2 clients x 3 overlapping connectors + the 4
+    archive connectors' raw schemas (WU4 ``_history`` hosts, TEN-R1); no
+    legacy shared ``raw_*`` schema appears."""
     expected = {
         "public",
         "staging",
@@ -439,6 +979,10 @@ def cp_nfr4() -> None:
         "raw_meta_nike",
         "raw_tiktok_nike",
         "raw_google_nike",
+        "raw_instagram_acme",
+        "raw_instagram_nike",
+        "raw_tiktok_organic_acme",
+        "raw_tiktok_organic_nike",
     }
     actual = schemas()
     assert actual == expected, (
@@ -531,8 +1075,19 @@ def test_wipe_sim_end_to_end(sim_stack) -> None:
     cp_b_s1_b_s3("nike", models, "nike")
     cp_c_s1()
     cp_g_s1()
+    # SDD-D WU4 archive checkpoints (docker-marked; outside the baseline count):
+    # live seeds pre-enable -> acme CATCH-S1/ARC-S2/S2b/S3 -> catalog -> RBAC ON
+    # -> nike TEN-S2/TEN-S1 -> teardown drops the nike archive schemas too.
+    cp_archive_live_seed_k()
+    acme_archive = cp_archive_acme()
+    # E WU-E4: organic gate runs real dbt run + test + ls between acme's full
+    # archive state (live @ K+1 + complete _history) and the catalog assert —
+    # dbt adds only client_acme objects, so cp_nfr4's schema set is unchanged.
+    cp_organic_marts()
+    cp_nightly_test_gate()
     cp_nfr4()
     cp_d_gate_off_on()
+    cp_archive_nike_ten(acme_archive)
     cp_b_s2_teardown()
     cp_freeze_db_gate()
     cp_concat_fail_loud()
